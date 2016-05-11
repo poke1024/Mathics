@@ -12,10 +12,9 @@ Jupyter does not have this limitation though.
 from __future__ import division
 
 from mathics.builtin.base import (
-    Builtin, Test, BoxConstruct, String)
+    Builtin, AtomBuiltin, Test, BoxConstruct, String)
 from mathics.core.expression import (
     Atom, Expression, Integer, Rational, Real, Symbol, from_python)
-from mathics.core.evaluation import Evaluation
 
 import six
 import base64
@@ -953,16 +952,14 @@ def _image_pixels(matrix):
         return None
 
 
-class ImageCreate(Builtin):
-    def apply(self, array, evaluation):
-        '''ImageCreate[array_]'''
-        pixels = _image_pixels(array.to_python())
-        if pixels is not None:
-            shape = pixels.shape
-            is_rgb = (len(shape) == 3 and shape[2] == 3)
-            return Image(pixels.clip(0, 1), 'RGB' if is_rgb else 'Grayscale')
-        else:
-            return Symbol('$Aborted')
+class ImageQ(Builtin):
+    def apply_image(self, image, evaluation):
+        'ImageQ[image_Image]'
+        return Symbol('True')
+
+    def apply_no_image(self, array, evaluation):
+        'ImageQ[Image[array_]]'
+        return Symbol('False')
 
 
 class ImageBox(BoxConstruct):
@@ -1090,3 +1087,15 @@ class Image(Atom):
             return 'Bit'
         else:
             return str(dtype)
+
+
+class ImageAtom(AtomBuiltin):
+    def apply_create(self, array, evaluation):
+        'Image[array_]'
+        pixels = _image_pixels(array.to_python())
+        if pixels is not None:
+            shape = pixels.shape
+            is_rgb = (len(shape) == 3 and shape[2] == 3)
+            return Image(pixels.clip(0, 1), 'RGB' if is_rgb else 'Grayscale')
+        else:
+            return Expression('Image', array)
