@@ -734,13 +734,101 @@ class ColorConvert(Builtin):
         return image.color_convert(colorspace.get_string_value())
 
 
+class DominantColors(Builtin):
+    def apply(self, image, evaluation):
+        'DominantColors[image_Image]'
+
+        try:
+            # reduce complexity: reduce to 256 colors (this is something that has been done
+            # before in algorithms for detecting dominant colors, see Kiranyaz et al.)
+            im = PIL.Image.fromarray(image.color_convert('RGB').pixels).convert(
+                'P', palette=PIL.Image.ADAPTIVE, colors=256)
+
+            flat_palette = numpy.array(list(im.getpalette())) / 255.0  # float values now
+            rgb_palette = [flat_palette[i:i + 3] for i in range(0, len(flat_palette), 3)]
+            lab_palette = skimage.color.rgb2lab([rgb_palette])[0]
+            palette = [tuple(x) for x in lab_palette]  # hashable now, thus usable in set
+
+            bins = numpy.bincount(numpy.array(list(im.getdata())), minlength=len(palette))
+            bins = dict(zip(palette, bins))
+
+            from scipy import spatial
+            from heapq import heapify, heappop
+
+            r = 100
+            euclidean = spatial.distance.euclidean
+
+            tree = spatial.KDTree(palette)
+            remaining = set(palette)
+            while len(remaining) > 0:
+                x = remaining.pop()
+                candidates = set(tree.query_ball_point(x, r)).intersection(remaining)
+                if len(candidates) > 0:
+                    heap = heapify([(euclidean(x, y), i, y) for i, y in enumerate(candidates)])
+
+                    xs = bins[x]
+                    while len(heap) > 0:
+                        _, _, z = heappop(heap)
+                        ys = bins[z]
+                        if xs >= ys:  # merge x with z, remove z
+                            xs += ys
+                            del bins[z]
+                            del remaining[z]
+                        else:  # merge x with z, remove x, continue with z (later in the loop)
+                            bins[z] += xs
+                            xs = 0
+                            break
+                    bins[x] = xs
+
+            # FIXME inspect remaining bins
+            return String(repr(bins))
+
+        except:
+            import sys
+            return String(repr(sys.exc_info()))
+
+
+def _kmeans_quantize(pixels):
+    from sklearn.cluster import KMeans
+    from sklearn.utils import shuffle
+
+    pixels = skimage.img_as_float(skimage.color.rgb2lab(pixels))
+
+    image_shape = pixels.shape
+    colors = pixels.reshape((image_shape[0] * image_shape[1], image_shape[2]))
+
+    n_samples = 1000
+    samples = shuffle(colors, random_state=0)[:n_samples]
+
+    kmeans = KMeans(n_clusters=5, random_state=0).fit(samples)
+    labels = kmeans.predict(colors)
+    new_pixels = kmeans.cluster_centers_[labels].reshape(image_shape)
+
+    return Image(skimage.color.lab2rgb(new_pixels), 'RGB')
+
+
 class ColorQuantize(Builtin):
-    def apply(self, image, n, evaluation):
-        'ColorQuantize[image_Image, n_Integer]'
-        pixels = skimage.img_as_ubyte(image.color_convert('RGB').pixels)
-        im = PIL.Image.fromarray(pixels).quantize(n.to_python())
-        im = im.convert('RGB')
-        return Image(numpy.array(im), 'RGB')
+    options = {
+        'Dithering': 'True'
+    }
+
+    def apply(self, image, n, evaluation, options):
+        'ColorQuantize[image_Image, n_Integer, OptionsPattern[ColorQuantize]]'
+        n_colors = n.to_python()
+        if n_colors < 2 or n_colors > 256:
+            return Symbol('$Aborted')
+
+        try:
+            dithering = self.get_option(options, 'Dithering', evaluation).is_true()
+            pixels = skimage.img_as_ubyte(image.color_convert('RGB').pixels)
+            im0 = PIL.Image.fromarray(pixels)
+            im = im0.convert('P', palette=PIL.Image.ADAPTIVE, colors=n_colors)
+            if dithering:
+                im = im0.quantize(palette=im)
+            return Image(numpy.array(im.convert('RGB')), 'RGB')
+        except:
+            import sys
+            return String(repr(sys.exc_info()))
 
 
 class Threshold(Builtin):
