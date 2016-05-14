@@ -750,38 +750,26 @@ class DominantColors(Builtin):
             palette = [tuple(x) for x in lab_palette]  # hashable now, thus usable in set
 
             bins = numpy.bincount(numpy.array(list(im.getdata())), minlength=len(palette))
-            bins = dict(zip(palette, bins))
 
             from scipy import spatial
-            from heapq import heapify, heappop
 
-            r = 100
-            euclidean = spatial.distance.euclidean
+            r = 50
 
             tree = spatial.KDTree(palette)
-            remaining = set(palette)
-            while len(remaining) > 0:
-                x = remaining.pop()
-                candidates = set(tree.query_ball_point(x, r)).intersection(remaining)
-                if len(candidates) > 0:
-                    heap = heapify([(euclidean(x, y), i, y) for i, y in enumerate(candidates)])
 
-                    xs = bins[x]
-                    while len(heap) > 0:
-                        _, _, z = heappop(heap)
-                        ys = bins[z]
-                        if xs >= ys:  # merge x with z, remove z
-                            xs += ys
-                            del bins[z]
-                            del remaining[z]
-                        else:  # merge x with z, remove x, continue with z (later in the loop)
-                            bins[z] += xs
-                            xs = 0
-                            break
-                    bins[x] = xs
+            for i, _ in sorted([(i, xs) for i, xs in enumerate(bins)],
+                               key=lambda k: k[1], reverse=True):
+                if bins[i] > 0:  # not merged yet?
+                    for j in tree.query_ball_point(palette[i], r):
+                        bins[i] += bins[j]
+                        bins[j] = 0
 
-            # FIXME inspect remaining bins
-            return String(repr(bins))
+            min_xs = 0
+            lab_dominant = sorted([(palette[i], xs) for i, xs in enumerate(bins) if xs > min_xs],
+                                  key=lambda k: k[1], reverse=True)
+            rgb_dominant = skimage.color.lab2rgb([list(map(lambda k: k[0], lab_dominant))])[0]
+
+            return Expression('List', *list(map(lambda x: Expression('RGBColor', *x), rgb_dominant)))
 
         except:
             import sys
@@ -809,7 +797,8 @@ def _kmeans_quantize(pixels):
 
 class ColorQuantize(Builtin):
     options = {
-        'Dithering': 'True'
+        'Dithering': 'True',
+        'Method': 'MedianCut',  # Mathics specific
     }
 
     def apply(self, image, n, evaluation, options):
@@ -819,6 +808,8 @@ class ColorQuantize(Builtin):
             return Symbol('$Aborted')
 
         try:
+            # median cut FIXME
+
             dithering = self.get_option(options, 'Dithering', evaluation).is_true()
             pixels = skimage.img_as_ubyte(image.color_convert('RGB').pixels)
             im0 = PIL.Image.fromarray(pixels)
