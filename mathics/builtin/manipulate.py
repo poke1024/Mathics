@@ -196,6 +196,7 @@ class Manipulate(Builtin):
     messages = {
         'jupyter': 'Manipulate[] only works inside a Jupyter notebook.',
         'noipywidget': 'Manipulate[] needs the ipywidgets module to work.',
+        'generr': 'Widget creation failed: ``',
         'widgetargs': 'Illegal variable range or step parameters for ``.'
     }
 
@@ -217,6 +218,9 @@ class Manipulate(Builtin):
                     return Expression(self.get_name(), expr, *args.get_sequence())  # identity
             except IllegalWidgetArguments as e:
                 evaluation.message('Manipulate', 'widgetargs', strip_context(str(e.var)))
+            except Exception as e:
+                evaluation.message('Manipulate', 'generr', str(e))  # usually some Jupyter error
+                return Symbol('$Aborted')
 
         clear_output_callback = evaluation.clear_output_callback
         display_data_callback = evaluation.display_data_callback  # for pushing updates
