@@ -1051,8 +1051,11 @@ class ImageBox(BoxConstruct):
             leaves[0].get_string_value(), leaves[1].get_int_value(), leaves[2].get_int_value())
 
         # see https://github.com/mathjax/MathJax/issues/896
-        xml = '<mtext>%s</mtext>' % img
-        return xml
+        # xml = '<mtext>%s</mtext>' % img
+        # return xml
+
+        # for Mathics/Jupyter with MathJax, we must not wrap with <mtext> here
+        return img
 
     def boxes_to_tex(self, leaves, **options):
         return '-Image-'
