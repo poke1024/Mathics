@@ -19,6 +19,7 @@ from mathics.core.expression import (
 import six
 import base64
 import functools
+import heapq
 
 try:
     import skimage
@@ -735,41 +736,77 @@ class ColorConvert(Builtin):
 
 
 class DominantColors(Builtin):
-    def apply(self, image, evaluation):
-        'DominantColors[image_Image]'
+    rules = {
+        'DominantColors[image_Image]': 'DominantColors[image, 256]'
+    }
+
+    options = {
+        'ColorCoverage': '0.1',
+        'MinColorDistance': '10'
+    }
+
+    def apply(self, image, n, evaluation, options):
+        'DominantColors[image_Image, n_Integer, OptionsPattern[ColorCoverage, MinColorDistance]]'
+
+        color_coverage_option = self.get_option(options, 'ColorCoverage', evaluation)
+        min_color_distance_option = self.get_option(options, 'MinColorDistance', evaluation)
+
+        min_color_distance = min_color_distance_option.get_int_value()
+        min_color_coverage = 0.1
+        max_color_coverage = 1
+        at_most = n.get_int_value()
+
+        if at_most > 256:
+            return
 
         try:
-            # reduce complexity: reduce to 256 colors (this is something that has been done
-            # before in algorithms for detecting dominant colors, see Kiranyaz et al.)
+            # reduce complexity by reducing to 256 colors. this is not uncommon; see Kiranyaz et al.,
+            # "Perceptual Dominant Color Extraction by Multidimensional Particle Swarm Optimization":
+            # "to reduce the computational complexity [...] a preprocessing step, which creates a
+            # limited color palette in RGB color domain, is first performed."
             im = PIL.Image.fromarray(image.color_convert('RGB').pixels).convert(
                 'P', palette=PIL.Image.ADAPTIVE, colors=256)
 
             flat_palette = numpy.array(list(im.getpalette())) / 255.0  # float values now
             rgb_palette = [flat_palette[i:i + 3] for i in range(0, len(flat_palette), 3)]
             lab_palette = skimage.color.rgb2lab([rgb_palette])[0]
-            palette = [tuple(x) for x in lab_palette]  # hashable now, thus usable in set
+            palette = [numpy.array(x) for x in lab_palette]
 
+            # compute number of occurences of each palette color in the image.
             bins = numpy.bincount(numpy.array(list(im.getdata())), minlength=len(palette))
+            num_pixels = im.size[0] * im.size[1]
 
-            from scipy import spatial
+            norm = numpy.linalg.norm
+            heap = [(norm(p - q), i, j) for i, p in enumerate(palette) for j, q in enumerate(palette[:i])]
+            heapq.heapify(heap)
 
-            r = 50
+            # now we cluster using nearest neighbours. on details how this works and how this compares
+            # to other clustering algorithms, see https://en.wikipedia.org/wiki/Single-linkage_clustering
+            identity = list(range(len(palette)))  # cluster of the n-th bin
+            while heap:
+                d, i, j = heapq.heappop(heap)  # find closest distance
+                if d >= min_color_distance:
+                    break
+                bi = identity[i]
+                bj = identity[j]
+                if bi == bj:  # already merged?
+                    continue
+                if bins[bi] > bins[bj]:
+                    identity[j] = identity[i]  # merge j into i
+                    bins[bi] += bins[bj]
+                    bins[bj] = 0
+                else:
+                    identity[i] = identity[j]  # merge i into j
+                    bins[bj] += bins[bi]
+                    bins[bi] = 0
 
-            tree = spatial.KDTree(palette)
-
-            for i, _ in sorted([(i, xs) for i, xs in enumerate(bins)],
-                               key=lambda k: k[1], reverse=True):
-                if bins[i] > 0:  # not merged yet?
-                    for j in tree.query_ball_point(palette[i], r):
-                        bins[i] += bins[j]
-                        bins[j] = 0
-
-            min_xs = 0
-            lab_dominant = sorted([(palette[i], xs) for i, xs in enumerate(bins) if xs > min_xs],
+            min_xs = max(0, int(num_pixels * min_color_coverage))
+            max_xs = min(num_pixels, int(num_pixels * max_color_coverage))
+            lab_dominant = sorted([(palette[i], xs) for i, xs in enumerate(bins) if max_xs >= xs > min_xs],
                                   key=lambda k: k[1], reverse=True)
             rgb_dominant = skimage.color.lab2rgb([list(map(lambda k: k[0], lab_dominant))])[0]
 
-            return Expression('List', *list(map(lambda x: Expression('RGBColor', *x), rgb_dominant)))
+            return Expression('List', *list(map(lambda x: Expression('RGBColor', *x), rgb_dominant[:at_most])))
 
         except:
             import sys
