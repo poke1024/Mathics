@@ -955,89 +955,135 @@ class PolygonBox(_Polyline):
 class Arrow(Builtin):
     """
     <dl>
-    <dt>'Arrow[{$point_1$, $point_2$ ...}]'
-        <dd>represents a line that ends with an arrow.
-    <dt>'Arrow[{$point_1$, $point_2$ ...}, $s$]'
-        <dd>represents an arrow line that keeps a distance of $s$ from its endpoint.
+    <dt>'Arrow[{$p1$, $p2$}]'
+        <dd>represents a line from $p1$ to $p2$ that ends with an arrow at $p2$.
+    <dt>'Arrow[{$p1$, $p2$}, $s$]'
+        <dd>represents a line with arrow that keeps a distance of $s$ from $p1$
+        and $p2$.
+    <dt>'Arrow[{$point_1$, $point_2$}, {$s1$, $s2$}]'
+        <dd>represents a line with arrow that keeps a distance of $s1$ from $p1$
+        and a distance of $s2$ from $p2$.
     </dl>
 
     >> Graphics[Arrow[{{0,0}, {1,1}}]]
     = -Graphics-
 
     >> Graphics[{Circle[], Arrow[{{2, 1}, {0, 0}}, 1]}]
-    = - Graphics-
+    = -Graphics-
+
+    >> Graphics[{Circle[],Arrow[{#, {0,0}},{0,1}]&/@Table[(1+x)*{Cos[x],Sin[x]},{x,0,Pi*2,Pi/3}]}]
+     = -Graphics-
     """
     pass
 
 
 class ArrowBox(_Polyline):
+    @staticmethod
+    def _setback(expr):
+        if expr.get_head_name() == 'System`List':
+            leaves = expr.leaves
+            if len(leaves) != 2:
+                raise BoxConstructError
+            return tuple(max(l.to_number(), 0.) for l in leaves)
+        else:
+            s = max(expr.to_number(), 0.)
+            return s, s
+
     def init(self, graphics, style, item=None):
         super(ArrowBox, self).init(graphics, item, style)
 
         if not item:
             raise BoxConstructError
 
-        if len(item.leaves) == 2:
-            s = item.leaves[1].to_number()
-            self.offset = [0, s]
-        elif len(item.leaves) == 1:
-            self.offset = [0, 0]
+        leaves = item.leaves
+        if len(leaves) == 2:
+            setback = self._setback(leaves[1])
+        elif len(leaves) == 1:
+            setback = (0, 0)
         else:
             raise BoxConstructError
 
-        self.do_init(graphics, item.leaves[0])
+        self.setback = setback
+        self.do_init(graphics, leaves[0])
+        self.graphics = graphics
         self.edge_color, _ = style.get_style(_Color, face_element=False)
 
-    def _draw(self, polyline, polygon, width):
-        arrow_length = width * 15.
+    def _draw(self, polyline, polygon, pixel_width):
+        # also see https://reference.wolfram.com/language/ref/Arrowheads.html
+        arrow_size = 0.04
         arrow_ratio = 0.3
 
-        def linear(p, q, d):
+        arrow_pixel_size = pixel_width * arrow_size
+
+        def norm(p, q):
             px, py = p
             qx, qy = q
 
             dx = qx - px
             dy = qy - py
 
-            line_length = sqrt(dx * dx + dy * dy)
-            scale = min(d / line_length, 1.)
+            length = sqrt(dx * dx + dy * dy)
+            return dx, dy, length
 
-            return scale * dx, scale * dy
+        def setback(p, q, d):
+            dx, dy, length = norm(p, q)
+            if d >= length:
+                return None
+            s = d / length
+            return s * dx, s * dy
 
         def shrink(line, s1, s2):
+            line = line[:]
+
             l0 = line[0]
             if s1:
-                yield l0.add(*linear(l0.p, line[1].p, s1))
-            else:
-                yield l0
-            for p in line[1:-1]:
-                yield p
+                xy = setback(l0.p, line[1].p, s1)
+                if xy:
+                    line[0] = l0.add(*xy)
+                else:
+                    line = line[1:]
+
             ll = line[-1]
             if s2:
-                yield ll.add(*linear(ll.p, line[-2].p, s2))
-            else:
-                yield ll
+                xy = setback(ll.p, line[-2].p, s2)
+                if xy:
+                    line[-1] = ll.add(*xy)
+                else:
+                    line = line[:-1]
+
+            return line
 
         for line in self.lines:
             if len(line) < 2:
                 continue
 
-            line_points = [xy.pos() for xy in shrink(line, *self.offset)]
-            along_x, along_y = linear(line_points[-2], line_points[-1], arrow_length)
+            line_points = [xy.pos() for xy in shrink(line, *self.setback)]
+
+            if len(line_points) < 2:
+                continue
+
+            along_x, along_y, along_l = norm(line_points[-1], line_points[-2])
+            along_x /= along_l
+            along_y /= along_l
 
             head_x, head_y = line_points[-1]
-            base_x = head_x - along_x
-            base_y = head_y - along_y
+            base_x = head_x + along_x * arrow_pixel_size
+            base_y = head_y + along_y * arrow_pixel_size
             line_points[-1] = (base_x, base_y)
+
+            edge_pos = max(arrow_pixel_size * 1.1, 0.)
+            edge_x = head_x + along_x * edge_pos
+            edge_y = head_y + along_y * edge_pos
 
             for s in polyline(line_points):
                 yield s
 
-            tnx = -along_y * arrow_ratio
-            tny = along_x * arrow_ratio
+            perp_x = -along_y * arrow_ratio * arrow_pixel_size
+            perp_y = along_x * arrow_ratio * arrow_pixel_size
             head_points = ((head_x, head_y),
-                           (base_x - tnx, base_y - tny),
-                           (base_x + tnx, base_y + tny))
+                           (edge_x - perp_x, edge_y - perp_y),
+                           (base_x, base_y),
+                           (edge_x + perp_x, edge_y + perp_y))
 
             for s in polygon(head_points):
                 yield s
@@ -1057,16 +1103,26 @@ class ArrowBox(_Polyline):
             yield ' '.join('%f,%f' % xy for xy in points)
             yield '" style="%s" />' % arrow_style
 
-        return ''.join(self._draw(polyline, polygon, width))
+        pixel_width = self.graphics.pixel_width or 0
+        return ''.join(self._draw(polyline, polygon, pixel_width))
 
     def to_asy(self):
-        l = self.style.get_line_width(face_element=False)
-        pen = create_pens(edge_color=self.edge_color, stroke_width=l)
-        asy = ''
-        for line in self.lines:
-            path = '--'.join(['(%.5g,%5g)' % coords.pos() for coords in line])
-            asy += 'draw(%s, %s);' % (path, pen)
-        return asy
+        width = self.style.get_line_width(face_element=False)
+        pen = create_pens(edge_color=self.edge_color, stroke_width=width)
+        arrow_pen = create_pens(face_color=self.edge_color, stroke_width=width)
+
+        def polyline(points):
+            yield 'draw('
+            yield '--'.join(['(%.5g,%5g)' % xy for xy in points])
+            yield ', % s);' % pen
+
+        def polygon(points):
+            yield 'filldraw('
+            yield '--'.join(['(%.5g,%5g)' % xy for xy in points])
+            yield '--cycle, % s);' % arrow_pen
+
+        pixel_width = self.graphics.pixel_width or 0
+        return ''.join(self._draw(polyline, polygon, pixel_width))
 
     def extent(self):
         width = self.style.get_line_width(face_element=False)
@@ -1083,7 +1139,7 @@ class ArrowBox(_Polyline):
             for p in points:
                 yield p
 
-        return list(self._draw(polyline, polygon, width))
+        return list(self._draw(polyline, polygon, 0))
 
 
 class InsetBox(_GraphicsElement):
