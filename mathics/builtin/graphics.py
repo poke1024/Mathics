@@ -20,7 +20,7 @@ from mathics.builtin.base import (
 from mathics.builtin.options import options_to_rules
 from mathics.core.expression import (
     Expression, Integer, Real, NumberError, Symbol, strip_context,
-    system_symbols, system_symbols_dict)
+    system_symbols, system_symbols_dict, BoxError)
 
 
 class CoordinatesError(BoxConstructError):
@@ -36,11 +36,12 @@ element_heads = system_symbols('Rectangle', 'Disk', 'Line', 'Point',
 color_heads = system_symbols('RGBColor', 'CMYKColor', 'Hue', 'GrayLevel')
 thickness_heads = system_symbols('Thickness', 'AbsoluteThickness', 'Thick',
                                  'Thin')
+font_heads = system_symbols('FontSize')
 
 GRAPHICS_SYMBOLS = set(['System`List', 'System`Rule', 'System`VertexColors'] +
                        list(element_heads) +
                        [element + 'Box' for element in element_heads] +
-                       list(color_heads) + list(thickness_heads))
+                       list(color_heads) + list(thickness_heads) + list(font_heads))
 
 
 def get_class(name):
@@ -495,7 +496,47 @@ class Thick(Builtin):
     }
 
 
+class Scaled(Builtin):
+    pass
+
+
 class Offset(Builtin):
+    pass
+
+
+class _FontSize(_GraphicsElement):
+    def init(self, graphics, item=None):
+        super(_FontSize, self).init(graphics, item)
+
+        if not item:
+            raise BoxConstructError
+
+        leaves = item.leaves
+        if len(leaves) != 1:
+            raise BoxConstructError
+        size = leaves[0]
+
+        if size.get_head_name() == 'System`Scaled':
+            self.unit = 'pixels'
+            self._size = size.leaves[0].to_number()
+        else:
+            self.unit = 'points'
+            self._size = size.to_number()
+
+        if self._size <= 0:
+            raise BoxConstructError
+
+    @property
+    def points(self):
+        return self._size
+
+    @property
+    def scaled(self):
+        g = self.graphics
+        return self._size * (g.pixel_width / g.extent_width)
+
+
+class FontSize(_FontSize):
     pass
 
 
@@ -582,6 +623,18 @@ class Text(Inset):
      = -Graphics-
 
     #> Graphics[{Text[x, {0,0}]}]
+     = -Graphics-
+
+    >> Graphics[{Circle[], Text[x+2]}]
+     = -Graphics-
+
+    >> Graphics[{Circle[], FontSize[Scaled[1]], Text[x+2]}]
+     = -Graphics-
+
+    >> Graphics[{Circle[], Text[x^2+x+x+y]}]
+     = -Graphics-
+
+    >> Graphics[Table[{Circle[{x^3, 0}, {x*x,x*x}],FontSize[Scaled[x*x]], Text[x,{x^3,0}]},{x,1,3,1}]]
      = -Graphics-
     """
 
@@ -963,6 +1016,7 @@ class InsetBox(_GraphicsElement):
              opos=(0, 0)):
         super(InsetBox, self).init(graphics, item, style)
         self.color, _ = style.get_style(_Color, face_element=False)
+        self.size, _ = style.get_style(_FontSize, face_element=False)
         if item is not None:
             if len(item.leaves) not in (1, 2, 3):
                 raise BoxConstructError
@@ -981,14 +1035,24 @@ class InsetBox(_GraphicsElement):
             self.content = content
             self.pos = pos
             self.opos = opos
-        self.content_text = self.content.boxes_to_text(
-            evaluation=self.graphics.evaluation)
+
+        try:
+            self.content_text = self.content.boxes_to_text(
+                evaluation=self.graphics.evaluation)
+        except BoxError:  # content cannot be formatted as text.
+            self.content_text = None
 
     def extent(self):
         p = self.pos.pos()
-        h = 25
-        w = len(self.content_text) * \
-            7  # rough approximation by numbers of characters
+
+        if self.content_text:
+            h = 25
+            w = len(self.content_text) * \
+                7  # rough approximation by numbers of characters
+        else:
+            w = 0
+            h = 0
+
         opos = self.opos
         x = p[0] - w / 2.0 - opos[0] * w / 2.0
         y = p[1] - h / 2.0 + opos[1] * h / 2.0
@@ -996,13 +1060,29 @@ class InsetBox(_GraphicsElement):
 
     def to_svg(self):
         x, y = self.pos.pos()
-        content = self.content.boxes_to_xml(
-            evaluation=self.graphics.evaluation)
-        style = create_css(font_color=self.color)
-        svg = (
-            '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
-            '<math>%s</math></foreignObject>') % (
-                x, y, self.opos[0], self.opos[1], style, content)
+
+        if self.content_text and all(self.opos[i] == 0 for i in (0, 1)):
+            dy = 0
+            if self.size:
+                if self.size.unit == 'points':
+                    font_size_attribute = 'font-size="%fpt"' % self.size.points
+                else:  # scaled
+                    font_size_attribute = 'font-size="%f"' % self.size.scaled
+                    dy = self.size.scaled / 2
+            else:
+                font_size_attribute = 'font-size="1pt"'
+
+            svg = '<text text-anchor="middle" x="%f" y="%f" %s>%s</text>' % (
+                x, y + dy / 2, font_size_attribute, self.content_text)
+        else:
+            content = self.content.boxes_to_xml(
+                evaluation=self.graphics.evaluation)
+            style = create_css(font_color=self.color)
+            svg = (
+                '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
+                '<math>%s</math></foreignObject>') % (
+                    x, y, self.opos[0], self.opos[1], style, content)
+
         return svg
 
     def to_asy(self):
@@ -1050,7 +1130,7 @@ class Style(object):
         head = item.get_head_name()
         if head in color_heads:
             style = get_class(head)(item)
-        elif head in thickness_heads:
+        elif head in thickness_heads or head in font_heads:
             style = get_class(head)(self.graphics, item)
         elif head in ('System`EdgeForm', 'System`FaceForm'):
             style = self.klass(self.graphics, edge=head == 'System`EdgeForm',
@@ -1143,7 +1223,8 @@ class _GraphicsElements(object):
                     continue
                 head = item.get_head_name()
                 if (head in color_heads or head in thickness_heads or   # noqa
-                    head in ('System`EdgeForm', 'System`FaceForm')):
+                    head in ('System`EdgeForm', 'System`FaceForm') or
+                    head in font_heads):
                     style.append(item)
                 elif head[-3:] == 'Box':  # and head[:-3] in element_heads:
                     element_class = get_class(head)
@@ -2006,4 +2087,5 @@ GLOBALS = system_symbols_dict({
     'AbsoluteThickness': AbsoluteThickness,
     'Thick': Thick,
     'Thin': Thin,
+    'FontSize': FontSize,
 })

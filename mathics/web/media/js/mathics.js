@@ -128,9 +128,10 @@ function drawMeshGradient(ctx, points) {
 }
 
 function createMathNode(nodeName) {
-	if (['svg', 'g', 'rect', 'circle', 'polyline', 'polygon', 'path', 'ellipse', 'foreignObject'].include(nodeName))
+	if (['svg', 'g', 'rect', 'circle', 'polyline', 'polygon', 'path',
+	    'ellipse', 'foreignObject', 'text'].include(nodeName)) {
 		return document.createElementNS("http://www.w3.org/2000/svg", nodeName);
-	else {
+	} else {
 		return document.createElement(nodeName);
 	}
 }
