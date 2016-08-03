@@ -1282,20 +1282,28 @@ class ArrowBox(_Polyline):
             boxw = xmax - xmin
             boxh = ymax - ymin
 
+            # transform the whole picture through a new pic, then restore the original picture.
+            template = """
+            add(shift(%f, %f) * scale(%f, %f) * rotate(%f) * shift(%f, %f) * (new picture() {
+                picture saved = currentpicture;
+                picture arrow = new picture;
+                currentpicture = arrow;
+                %s
+                currentpicture = saved;
+                return arrow;
+            })());
+            """
+
             def draw(px, py, vx, vy, t1, s):
                 t0 = t1 - s / 2.
                 cx = px + t0 * vx
                 cy = py + t0 * vy
-
-                # transform the whole picture through a new pic, then restore the original picture.
-                yield "picture old = currentpicture; picture pic = new picture; currentpicture = pic;"
-                yield asy
-                yield "currentpicture = old;"
-                yield "add(shift(%f, %f) * scale(%f, %f) * rotate(%f) * shift(%f, %f) * pic);" % (
+                yield template % (
                     cx, cy,
                     s / boxw, s / boxh,
                     degrees(atan2(vy, vx)),
-                    -(xmin + xmax) / 2., -(ymin + ymax) / 2.)
+                    -(xmin + xmax) / 2., -(ymin + ymax) / 2.,
+                    asy)
 
             return draw
 
