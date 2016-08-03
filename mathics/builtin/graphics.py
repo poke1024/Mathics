@@ -973,8 +973,47 @@ class Arrow(Builtin):
 
     >> Graphics[{Circle[],Arrow[{#, {0,0}},{0,1}]&/@Table[(1+x)*{Cos[x],Sin[x]},{x,0,Pi*2,Pi/3}]}]
      = -Graphics-
+
+    >> Table[Graphics[{Circle[], Arrow[Table[{Cos[phi],Sin[phi]},{phi,0,2*Pi,Pi/2}],{d, d}]}],{d,0,2,0.5}]
+     = -Graphics-
+
+    >> Graphics[{Circle[],Arrowheads[{-0.04, 0.04}],Arrow[{{0, 0}, {2, 2}}, {1,1}]}]
+     = -Graphics-
     """
     pass
+
+
+class Arrowheads(_GraphicsElement):
+    default_size = 0.04
+
+    def init(self, graphics, item=None):
+        super(Arrowheads, self).init(graphics, item)
+        if len(item.leaves) != 1:
+            raise BoxConstructError
+        self.spec = item.leaves[0]
+
+    def positions(self, extent):
+        if self.spec.get_head_name() == 'System`List':
+            leaves = self.spec.leaves
+            if all(x.get_head_name() == 'System`List' for x in leaves):
+                for head in leaves:
+                    spec = head.leaves
+                    if len(spec) != 2:
+                        raise BoxConstructError
+                    size_spec = spec[0]
+                    if isinstance(size_spec, Symbol) and size_spec.get_name() == 'System`Automatic':
+                        s = self.default_size
+                    elif size_spec.is_numeric():
+                        s = size_spec.to_number()
+                    else:
+                        raise BoxConstructError
+                    yield s * extent, spec[1].to_number()
+            else:
+                n = max(1., len(leaves) - 1.)
+                for i, head in enumerate(leaves):
+                    yield head.to_number() * extent, i / n
+        else:
+            yield self.spec.to_number() * extent, 1
 
 
 class ArrowBox(_Polyline):
@@ -1007,13 +1046,14 @@ class ArrowBox(_Polyline):
         self.do_init(graphics, leaves[0])
         self.graphics = graphics
         self.edge_color, _ = style.get_style(_Color, face_element=False)
+        self.heads, _ = style.get_style(Arrowheads, face_element=False)
 
-    def _draw(self, polyline, polygon, pixel_width):
-        # also see https://reference.wolfram.com/language/ref/Arrowheads.html
-        arrow_size = 0.04
-        arrow_ratio = 0.3
-
-        arrow_pixel_size = pixel_width * arrow_size
+    def _draw(self, polyline, polygon, extent):
+        if self.heads:
+            heads = list(self.heads.positions(extent))
+            heads = sorted(heads, key=lambda spec: spec[1])  # sort by pos
+        else:
+            heads = ((extent * Arrowheads.default_size, 1),)
 
         def norm(p, q):
             px, py = p
@@ -1025,67 +1065,123 @@ class ArrowBox(_Polyline):
             length = sqrt(dx * dx + dy * dy)
             return dx, dy, length
 
+        def segments(points):
+            for i in range(len(points) - 1):
+                px, py = points[i]
+                dx, dy, dl = norm((px, py), points[i + 1])
+                yield dl, px, py, dx, dy
+
         def setback(p, q, d):
             dx, dy, length = norm(p, q)
             if d >= length:
-                return None
-            s = d / length
-            return s * dx, s * dy
+                return None, length
+            else:
+                s = d / length
+                return (s * dx, s * dy), d
 
-        def shrink(line, s1, s2):
-            line = line[:]
-
-            l0 = line[0]
-            if s1:
-                xy = setback(l0.p, line[1].p, s1)
-                if xy:
-                    line[0] = l0.add(*xy)
+        def shrink1(line, s):
+            while s > 0.:
+                if len(line) < 2:
+                    return []
+                xy, length = setback(line[0].p, line[1].p, s)
+                if xy is not None:
+                    line[0] = line[0].add(*xy)
                 else:
                     line = line[1:]
-
-            ll = line[-1]
-            if s2:
-                xy = setback(ll.p, line[-2].p, s2)
-                if xy:
-                    line[-1] = ll.add(*xy)
-                else:
-                    line = line[:-1]
-
+                s -= length
             return line
+
+        def shrink(line, s1, s2):
+            return list(reversed(shrink1(list(reversed(shrink1(line[:], s1))), s2)))
+
+        # the drawn arrow looks looks like this:
+        #
+        #       H
+        #      .:.
+        #     . : .
+        #    .  :  .
+        #   .  .B.  .
+        #  . .  :  . .
+        # S.    E    .S
+        #       :
+        #       :
+        #       :
+        #
+        # the head H is where the arrow's point is. at base B, the arrow spreads out at right angles from the line
+        # it attaches to. the arrow size 's' given in the Arrowheads specification always specifies the length H-B.
+        #
+        # the spread out points S are defined via two constants: arrow_edge (which defines the factor to get from
+        # H-B to H-E) and arrow_spread (which defines the factor to get from H-B to E-S).
+
+        # also see https://reference.wolfram.com/language/ref/Arrowheads.html
+        arrow_spread = 0.3
+        arrow_edge = 1.1
+
+        def render(points, heads, polygon):  # assumed to be sorted by pos
+            seg = list(segments(points))
+
+            if not seg:
+                return
+
+            i = 0
+            n = len(seg)
+            dl, px, py, dx, dy = seg[i]
+            total = sum(segment[0] for segment in seg)
+
+            for s, t1 in ((s, pos * total) for s, pos in heads):
+                if s == 0.:
+                    continue
+
+                if i < n:
+                    while t1 > dl:
+                        t1 -= dl
+                        i += 1
+                        if i == n:
+                            px += dx  # move to segment end
+                            py += dy
+                            break
+                        else:
+                            dl, px, py, dx, dy = seg[i]
+
+                vx = dx / dl
+                vy = dy / dl
+
+                hx = px + t1 * vx  # compute H
+                hy = py + t1 * vy
+
+                t0 = t1 - s
+                bx = px + t0 * vx  # compute B
+                by = py + t0 * vy
+
+                te = t1 - arrow_edge * s
+                ex = px + te * vx  # compute E
+                ey = py + te * vy
+
+                ts = arrow_spread * s
+                sx = -vy * ts
+                sy = vx * ts
+
+                head_points = ((hx, hy),
+                               (ex + sx, ey + sy),
+                               (bx, by),
+                               (ex - sx, ey - sy))
+
+                for shape in polygon(head_points):
+                    yield shape
 
         for line in self.lines:
             if len(line) < 2:
                 continue
 
+            # note that shrinking needs to happen in the Graphics[] coordinate space, whereas the
+            # subsequent position calculation needs to happen in pixel space.
+
             line_points = [xy.pos() for xy in shrink(line, *self.setback)]
-
-            if len(line_points) < 2:
-                continue
-
-            along_x, along_y, along_l = norm(line_points[-1], line_points[-2])
-            along_x /= along_l
-            along_y /= along_l
-
-            head_x, head_y = line_points[-1]
-            base_x = head_x + along_x * arrow_pixel_size
-            base_y = head_y + along_y * arrow_pixel_size
-            line_points[-1] = (base_x, base_y)
-
-            edge_pos = max(arrow_pixel_size * 1.1, 0.)
-            edge_x = head_x + along_x * edge_pos
-            edge_y = head_y + along_y * edge_pos
 
             for s in polyline(line_points):
                 yield s
 
-            perp_x = -along_y * arrow_ratio * arrow_pixel_size
-            perp_y = along_x * arrow_ratio * arrow_pixel_size
-            head_points = ((head_x, head_y),
-                           (edge_x - perp_x, edge_y - perp_y),
-                           (base_x, base_y),
-                           (edge_x + perp_x, edge_y + perp_y))
-
-            for s in polygon(head_points):
+            for s in render(line_points, heads, polygon):
                 yield s
 
     def to_svg(self):
@@ -1103,8 +1199,8 @@ class ArrowBox(_Polyline):
             yield ' '.join('%f,%f' % xy for xy in points)
             yield '" style="%s" />' % arrow_style
 
-        pixel_width = self.graphics.pixel_width or 0
-        return ''.join(self._draw(polyline, polygon, pixel_width))
+        extent = self.graphics.translate_relative(1.)
+        return ''.join(self._draw(polyline, polygon, extent))
 
     def to_asy(self):
         width = self.style.get_line_width(face_element=False)
@@ -1121,8 +1217,8 @@ class ArrowBox(_Polyline):
             yield '--'.join(['(%.5g,%5g)' % xy for xy in points])
             yield '--cycle, % s);' % arrow_pen
 
-        pixel_width = self.graphics.pixel_width or 0
-        return ''.join(self._draw(polyline, polygon, pixel_width))
+        extent = self.graphics.translate_relative(1.)
+        return ''.join(self._draw(polyline, polygon, extent))
 
     def extent(self):
         width = self.style.get_line_width(face_element=False)
