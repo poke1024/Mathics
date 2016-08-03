@@ -9,7 +9,7 @@ from __future__ import unicode_literals
 from __future__ import absolute_import
 from __future__ import division
 
-from math import floor, ceil, log10, sqrt
+from math import floor, ceil, log10, sqrt, atan2, degrees
 import json
 from six.moves import map
 from six.moves import range
@@ -138,6 +138,23 @@ def create_pens(edge_color=None, face_color=None, stroke_width=None,
     elif is_face_element:
         result.append('nullpen')
     return ', '.join(result)
+
+
+def _extract_graphics(graphics, format, evaluation):
+    graphics_box = Expression('MakeBoxes', graphics).evaluate(evaluation)
+    builtin = GraphicsBox(expression=False)
+    elements, calc_dimensions = builtin._prepare_elements(
+        graphics_box.leaves, {'evaluation': evaluation}, neg_y=True)
+    xmin, xmax, ymin, ymax, _, _, _, _ = calc_dimensions()
+
+    if format == 'asy':
+        code = '\n'.join(element.to_asy() for element in elements.elements)
+    elif format == 'svg':
+        code = elements.to_svg()
+    else:
+        raise NotImplementedError
+
+    return xmin, xmax, ymin, ymax, code
 
 
 class Graphics(Builtin):
@@ -971,13 +988,19 @@ class Arrow(Builtin):
     >> Graphics[{Circle[], Arrow[{{2, 1}, {0, 0}}, 1]}]
     = -Graphics-
 
-    >> Graphics[{Circle[],Arrow[{#, {0,0}},{0,1}]&/@Table[(1+x)*{Cos[x],Sin[x]},{x,0,Pi*2,Pi/3}]}]
-     = -Graphics-
+    Keeping distances may happen across multiple segments:
 
     >> Table[Graphics[{Circle[], Arrow[Table[{Cos[phi],Sin[phi]},{phi,0,2*Pi,Pi/2}],{d, d}]}],{d,0,2,0.5}]
      = -Graphics-
 
-    >> Graphics[{Circle[],Arrowheads[{-0.04, 0.04}],Arrow[{{0, 0}, {2, 2}}, {1,1}]}]
+    Arrows on both ends can be achieved using negative sizes:
+
+    >> Graphics[{Circle[],Arrowheads[{-0.04, 0.04}], Arrow[{{0, 0}, {2, 2}}, {1,1}]}]
+     = -Graphics-
+
+    You may also specify our own arrow shapes:
+
+    >> Graphics[{Circle[], Arrowheads[{{0.04, 1, Graphics[{Red, Disk[]}]}}], Arrow[{{0, 0}, {Cos[Pi/3],Sin[Pi/3]}}]}]
      = -Graphics-
     """
     pass
@@ -992,13 +1015,15 @@ class Arrowheads(_GraphicsElement):
             raise BoxConstructError
         self.spec = item.leaves[0]
 
-    def positions(self, extent):
+    def heads(self, extent, default_arrow, custom_arrow):
+        # see https://reference.wolfram.com/language/ref/Arrowheads.html
+
         if self.spec.get_head_name() == 'System`List':
             leaves = self.spec.leaves
             if all(x.get_head_name() == 'System`List' for x in leaves):
                 for head in leaves:
                     spec = head.leaves
-                    if len(spec) != 2:
+                    if len(spec) not in (2, 3):
                         raise BoxConstructError
                     size_spec = spec[0]
                     if isinstance(size_spec, Symbol) and size_spec.get_name() == 'System`Automatic':
@@ -1007,27 +1032,25 @@ class Arrowheads(_GraphicsElement):
                         s = size_spec.to_number()
                     else:
                         raise BoxConstructError
-                    yield s * extent, spec[1].to_number()
+
+                    if len(spec) == 3:
+                        graphics = spec[2]
+                        if graphics.get_head_name() != 'System`Graphics':
+                            raise BoxConstructError
+                        arrow = custom_arrow(graphics)
+                    else:
+                        arrow = default_arrow
+
+                    yield s * extent, spec[1].to_number(), arrow
             else:
                 n = max(1., len(leaves) - 1.)
                 for i, head in enumerate(leaves):
-                    yield head.to_number() * extent, i / n
+                    yield head.to_number() * extent, i / n, default_arrow
         else:
-            yield self.spec.to_number() * extent, 1
+            yield self.spec.to_number() * extent, 1, default_arrow
 
 
 class ArrowBox(_Polyline):
-    @staticmethod
-    def _setback(expr):
-        if expr.get_head_name() == 'System`List':
-            leaves = expr.leaves
-            if len(leaves) != 2:
-                raise BoxConstructError
-            return tuple(max(l.to_number(), 0.) for l in leaves)
-        else:
-            s = max(expr.to_number(), 0.)
-            return s, s
-
     def init(self, graphics, style, item=None):
         super(ArrowBox, self).init(graphics, item, style)
 
@@ -1036,7 +1059,7 @@ class ArrowBox(_Polyline):
 
         leaves = item.leaves
         if len(leaves) == 2:
-            setback = self._setback(leaves[1])
+            setback = self._setback_spec(leaves[1])
         elif len(leaves) == 1:
             setback = (0, 0)
         else:
@@ -1048,12 +1071,73 @@ class ArrowBox(_Polyline):
         self.edge_color, _ = style.get_style(_Color, face_element=False)
         self.heads, _ = style.get_style(Arrowheads, face_element=False)
 
-    def _draw(self, polyline, polygon, extent):
+    @staticmethod
+    def _setback_spec(expr):
+        if expr.get_head_name() == 'System`List':
+            leaves = expr.leaves
+            if len(leaves) != 2:
+                raise BoxConstructError
+            return tuple(max(l.to_number(), 0.) for l in leaves)
+        else:
+            s = max(expr.to_number(), 0.)
+            return s, s
+
+    @staticmethod
+    def _default_arrow(polygon):
+        # the default arrow drawn by draw() below looks looks like this:
+        #
+        #       H
+        #      .:.
+        #     . : .
+        #    .  :  .
+        #   .  .B.  .
+        #  . .  :  . .
+        # S.    E    .S
+        #       :
+        #       :
+        #       :
+        #
+        # the head H is where the arrow's point is. at base B, the arrow spreads out at right angles from the line
+        # it attaches to. the arrow size 's' given in the Arrowheads specification always specifies the length H-B.
+        #
+        # the spread out points S are defined via two constants: arrow_edge (which defines the factor to get from
+        # H-B to H-E) and arrow_spread (which defines the factor to get from H-B to E-S).
+
+        arrow_spread = 0.3
+        arrow_edge = 1.1
+
+        def draw(px, py, vx, vy, t1, s):
+            hx = px + t1 * vx  # compute H
+            hy = py + t1 * vy
+
+            t0 = t1 - s
+            bx = px + t0 * vx  # compute B
+            by = py + t0 * vy
+
+            te = t1 - arrow_edge * s
+            ex = px + te * vx  # compute E
+            ey = py + te * vy
+
+            ts = arrow_spread * s
+            sx = -vy * ts
+            sy = vx * ts
+
+            head_points = ((hx, hy),
+                           (ex + sx, ey + sy),
+                           (bx, by),
+                           (ex - sx, ey - sy))
+
+            for shape in polygon(head_points):
+                yield shape
+
+        return draw
+
+    def _draw(self, polyline, default_arrow, custom_arrow, extent):
         if self.heads:
-            heads = list(self.heads.positions(extent))
+            heads = list(self.heads.heads(extent, default_arrow, custom_arrow))
             heads = sorted(heads, key=lambda spec: spec[1])  # sort by pos
         else:
-            heads = ((extent * Arrowheads.default_size, 1),)
+            heads = ((extent * Arrowheads.default_size, 1, default_arrow),)
 
         def norm(p, q):
             px, py = p
@@ -1094,30 +1178,7 @@ class ArrowBox(_Polyline):
         def shrink(line, s1, s2):
             return list(reversed(shrink1(list(reversed(shrink1(line[:], s1))), s2)))
 
-        # the drawn arrow looks looks like this:
-        #
-        #       H
-        #      .:.
-        #     . : .
-        #    .  :  .
-        #   .  .B.  .
-        #  . .  :  . .
-        # S.    E    .S
-        #       :
-        #       :
-        #       :
-        #
-        # the head H is where the arrow's point is. at base B, the arrow spreads out at right angles from the line
-        # it attaches to. the arrow size 's' given in the Arrowheads specification always specifies the length H-B.
-        #
-        # the spread out points S are defined via two constants: arrow_edge (which defines the factor to get from
-        # H-B to H-E) and arrow_spread (which defines the factor to get from H-B to E-S).
-
-        # also see https://reference.wolfram.com/language/ref/Arrowheads.html
-        arrow_spread = 0.3
-        arrow_edge = 1.1
-
-        def render(points, heads, polygon):  # assumed to be sorted by pos
+        def render(points, heads):  # heads has to be sorted by pos
             seg = list(segments(points))
 
             if not seg:
@@ -1128,45 +1189,22 @@ class ArrowBox(_Polyline):
             dl, px, py, dx, dy = seg[i]
             total = sum(segment[0] for segment in seg)
 
-            for s, t1 in ((s, pos * total) for s, pos in heads):
-                if s == 0.:
+            for s, t, draw in ((s, pos * total, draw) for s, pos, draw in heads):
+                if s == 0.:  # ignore zero-sized arrows
                     continue
 
-                if i < n:
-                    while t1 > dl:
-                        t1 -= dl
+                if i < n:  # not yet past last segment?
+                    while t > dl:  # position past current segment?
+                        t -= dl
                         i += 1
                         if i == n:
-                            px += dx  # move to segment end
+                            px += dx  # move to last segment's end
                             py += dy
                             break
                         else:
                             dl, px, py, dx, dy = seg[i]
 
-                vx = dx / dl
-                vy = dy / dl
-
-                hx = px + t1 * vx  # compute H
-                hy = py + t1 * vy
-
-                t0 = t1 - s
-                bx = px + t0 * vx  # compute B
-                by = py + t0 * vy
-
-                te = t1 - arrow_edge * s
-                ex = px + te * vx  # compute E
-                ey = py + te * vy
-
-                ts = arrow_spread * s
-                sx = -vy * ts
-                sy = vx * ts
-
-                head_points = ((hx, hy),
-                               (ex + sx, ey + sy),
-                               (bx, by),
-                               (ex - sx, ey - sy))
-
-                for shape in polygon(head_points):
+                for shape in draw(px, py, dx / dl, dy / dl, t, s):
                     yield shape
 
         for line in self.lines:
@@ -1181,7 +1219,7 @@ class ArrowBox(_Polyline):
             for s in polyline(line_points):
                 yield s
 
-            for s in render(line_points, heads, polygon):
+            for s in render(line_points, heads):
                 yield s
 
     def to_svg(self):
@@ -1199,8 +1237,29 @@ class ArrowBox(_Polyline):
             yield ' '.join('%f,%f' % xy for xy in points)
             yield '" style="%s" />' % arrow_style
 
+        def custom_arrow(graphics):
+            xmin, xmax, ymin, ymax, svg = _extract_graphics(
+                graphics, 'svg', self.graphics.evaluation)
+            boxw = xmax - xmin
+            boxh = ymax - ymin
+
+            def draw(px, py, vx, vy, t1, s):
+                t0 = t1 - s / 2.
+                cx = px + t0 * vx
+                cy = py + t0 * vy
+                yield '<g transform="translate(%f, %f) scale(%f, %f) rotate(%f), translate(%f, %f)">' % (
+                    cx, cy,
+                    s / boxw, s / boxh,
+                    degrees(atan2(vy, vx)),
+                    -(xmin + xmax) / 2., -(ymin + ymax) / 2.)
+                yield svg
+                yield '</g>'
+
+            return draw
+
         extent = self.graphics.translate_relative(1.)
-        return ''.join(self._draw(polyline, polygon, extent))
+        default_arrow = self._default_arrow(polygon)
+        return ''.join(self._draw(polyline, default_arrow, custom_arrow, extent))
 
     def to_asy(self):
         width = self.style.get_line_width(face_element=False)
@@ -1217,8 +1276,32 @@ class ArrowBox(_Polyline):
             yield '--'.join(['(%.5g,%5g)' % xy for xy in points])
             yield '--cycle, % s);' % arrow_pen
 
+        def custom_arrow(graphics):
+            xmin, xmax, ymin, ymax, asy = _extract_graphics(
+                graphics, 'asy', self.graphics.evaluation)
+            boxw = xmax - xmin
+            boxh = ymax - ymin
+
+            def draw(px, py, vx, vy, t1, s):
+                t0 = t1 - s / 2.
+                cx = px + t0 * vx
+                cy = py + t0 * vy
+
+                # transform the whole picture through a new pic, then restore the original picture.
+                yield "picture old = currentpicture; picture pic = new picture; currentpicture = pic;"
+                yield asy
+                yield "currentpicture = old;"
+                yield "add(shift(%f, %f) * scale(%f, %f) * rotate(%f) * shift(%f, %f) * pic);" % (
+                    cx, cy,
+                    s / boxw, s / boxh,
+                    degrees(atan2(vy, vx)),
+                    -(xmin + xmax) / 2., -(ymin + ymax) / 2.)
+
+            return draw
+
         extent = self.graphics.translate_relative(1.)
-        return ''.join(self._draw(polyline, polygon, extent))
+        default_arrow = self._default_arrow(polygon)
+        return ''.join(self._draw(polyline, default_arrow, custom_arrow, extent))
 
     def extent(self):
         width = self.style.get_line_width(face_element=False)
@@ -1235,7 +1318,10 @@ class ArrowBox(_Polyline):
             for p in points:
                 yield p
 
-        return list(self._draw(polyline, polygon, 0))
+        def custom_arrow(box):
+            pass
+
+        return list(self._draw(polyline, polygon, custom_arrow, 0))
 
 
 class InsetBox(_GraphicsElement):
