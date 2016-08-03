@@ -2260,7 +2260,7 @@ class Large(Builtin):
 
 
 element_heads = frozenset(system_symbols(
-    'Rectangle', 'Disk', 'Line', 'Point', 'Circle', 'Polygon', 'Inset', 'Text', 'Sphere'))
+    'Rectangle', 'Disk', 'Line', 'Arrow', 'Point', 'Circle', 'Polygon', 'Inset', 'Text', 'Sphere'))
 
 styles = system_symbols_dict({
     'RGBColor': RGBColor,
@@ -2272,6 +2272,8 @@ styles = system_symbols_dict({
     'AbsoluteThickness': AbsoluteThickness,
     'Thick': Thick,
     'Thin': Thin,
+
+    'Arrowheads': Arrowheads,
 })
 
 style_heads = frozenset(styles.keys())
