@@ -991,7 +991,7 @@ class Arrow(Builtin):
     Keeping distances may happen across multiple segments:
 
     >> Table[Graphics[{Circle[], Arrow[Table[{Cos[phi],Sin[phi]},{phi,0,2*Pi,Pi/2}],{d, d}]}],{d,0,2,0.5}]
-     = -Graphics-
+     = {-Graphics-, -Graphics-, -Graphics-, -Graphics-, -Graphics-}
 
     Arrows on both ends can be achieved using negative sizes:
 
