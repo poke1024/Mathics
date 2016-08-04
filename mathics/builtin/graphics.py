@@ -157,6 +157,64 @@ def _extract_graphics(graphics, format, evaluation):
     return xmin, xmax, ymin, ymax, code
 
 
+class _SVGTransform():
+    def __init__(self):
+        self.transforms = []
+
+    def matrix(self, a, b, c, d, e, f):
+        # a c e
+        # b d f
+        # 0 0 1
+        self.transforms.append('matrix(%f, %f, %f, %f, %f, %f)' % (a, b, c, d, e, f))
+
+    def translate(self, x, y):
+        self.transforms.append('translate(%f, %f)' % (x, y))
+
+    def scale(self, x, y):
+        self.transforms.append('scale(%f, %f)' % (x, y))
+
+    def rotate(self, x):
+        self.transforms.append('rotate(%f)' % x)
+
+    def apply(self, svg):
+        return '<g transform="%s">%s</g>' % (' '.join(self.transforms), svg)
+
+
+class _ASYTransform():
+    _template = """
+    add(%s * (new picture() {
+        picture saved = currentpicture;
+        picture transformed = new picture;
+        currentpicture = transformed;
+        %s
+        currentpicture = saved;
+        return transformed;
+    })());
+    """
+
+    def __init__(self):
+        self.transforms = []
+
+    def matrix(self, a, b, c, d, e, f):
+        # a c e
+        # b d f
+        # 0 0 1
+        # see http://asymptote.sourceforge.net/doc/Transforms.html#Transforms
+        self.transforms.append('(%f, %f, %f, %f, %f, %f)' % (e, f, a, c, b, d))
+
+    def translate(self, x, y):
+        self.transforms.append('shift(%f, %f)' % (x, y))
+
+    def scale(self, x, y):
+        self.transforms.append('scale(%f, %f)' % (x, y))
+
+    def rotate(self, x):
+        self.transforms.append('rotate(%f)' % x)
+
+    def apply(self, asy):
+        return self._template % (' * '.join(self.transforms), asy)
+
+
 class Graphics(Builtin):
     r"""
     <dl>
@@ -1222,6 +1280,29 @@ class ArrowBox(_Polyline):
             for s in render(line_points, heads):
                 yield s
 
+    def _custom_arrow(self, format, format_transform):
+        def make(graphics):
+            xmin, xmax, ymin, ymax, code = _extract_graphics(
+                graphics, format, self.graphics.evaluation)
+            boxw = xmax - xmin
+            boxh = ymax - ymin
+
+            def draw(px, py, vx, vy, t1, s):
+                t0 = t1 - s / 2.
+                cx = px + t0 * vx
+                cy = py + t0 * vy
+
+                transform = format_transform()
+                transform.translate(cx, cy)
+                transform.scale(s / boxw, s / boxh)
+                transform.rotate(degrees(atan2(vy, vx)))
+                transform.translate(-(xmin + xmax) / 2., -(ymin + ymax) / 2.)
+                yield transform.apply(code)
+
+            return draw
+
+        return make
+
     def to_svg(self):
         width = self.style.get_line_width(face_element=False)
         style = create_css(edge_color=self.edge_color, stroke_width=width)
@@ -1237,28 +1318,9 @@ class ArrowBox(_Polyline):
             yield ' '.join('%f,%f' % xy for xy in points)
             yield '" style="%s" />' % arrow_style
 
-        def custom_arrow(graphics):
-            xmin, xmax, ymin, ymax, svg = _extract_graphics(
-                graphics, 'svg', self.graphics.evaluation)
-            boxw = xmax - xmin
-            boxh = ymax - ymin
-
-            def draw(px, py, vx, vy, t1, s):
-                t0 = t1 - s / 2.
-                cx = px + t0 * vx
-                cy = py + t0 * vy
-                yield '<g transform="translate(%f, %f) scale(%f, %f) rotate(%f), translate(%f, %f)">' % (
-                    cx, cy,
-                    s / boxw, s / boxh,
-                    degrees(atan2(vy, vx)),
-                    -(xmin + xmax) / 2., -(ymin + ymax) / 2.)
-                yield svg
-                yield '</g>'
-
-            return draw
-
         extent = self.graphics.translate_relative(1.)
         default_arrow = self._default_arrow(polygon)
+        custom_arrow = self._custom_arrow('svg', _SVGTransform)
         return ''.join(self._draw(polyline, default_arrow, custom_arrow, extent))
 
     def to_asy(self):
@@ -1276,39 +1338,9 @@ class ArrowBox(_Polyline):
             yield '--'.join(['(%.5g,%5g)' % xy for xy in points])
             yield '--cycle, % s);' % arrow_pen
 
-        def custom_arrow(graphics):
-            xmin, xmax, ymin, ymax, asy = _extract_graphics(
-                graphics, 'asy', self.graphics.evaluation)
-            boxw = xmax - xmin
-            boxh = ymax - ymin
-
-            # transform the whole picture through a new pic, then restore the original picture.
-            template = """
-            add(shift(%f, %f) * scale(%f, %f) * rotate(%f) * shift(%f, %f) * (new picture() {
-                picture saved = currentpicture;
-                picture arrow = new picture;
-                currentpicture = arrow;
-                %s
-                currentpicture = saved;
-                return arrow;
-            })());
-            """
-
-            def draw(px, py, vx, vy, t1, s):
-                t0 = t1 - s / 2.
-                cx = px + t0 * vx
-                cy = py + t0 * vy
-                yield template % (
-                    cx, cy,
-                    s / boxw, s / boxh,
-                    degrees(atan2(vy, vx)),
-                    -(xmin + xmax) / 2., -(ymin + ymax) / 2.,
-                    asy)
-
-            return draw
-
         extent = self.graphics.translate_relative(1.)
         default_arrow = self._default_arrow(polygon)
+        custom_arrow = self._custom_arrow('asy', _ASYTransform)
         return ''.join(self._draw(polyline, default_arrow, custom_arrow, extent))
 
     def extent(self):
