@@ -1050,6 +1050,27 @@ class Arrow(Builtin):
 
     >> Table[Graphics[{Circle[], Arrow[Table[{Cos[phi],Sin[phi]},{phi,0,2*Pi,Pi/2}],{d, d}]}],{d,0,2,0.5}]
      = {-Graphics-, -Graphics-, -Graphics-, -Graphics-, -Graphics-}
+    """
+
+    pass
+
+
+class Arrowheads(_GraphicsElement):
+    """
+    <dl>
+    <dt>'Arrowheads[$s$]'
+        <dd>specifies that Arrow[] draws one arrow of size $s$ (relative to width of image, defaults to 0.04).
+    <dt>'Arrowheads[{$spec1$, $spec2$, ..., $specn$}]'
+        <dd>specifies that Arrow[] draws n arrows as defined by $spec1$, $spec2$, ... $specn$.
+    <dt>'Arrowheads[{{$s$}}]'
+        <dd>specifies that one arrow of size $s$ should be drawn.
+    <dt>'Arrowheads[{{$s$, $pos$}}]'
+        <dd>specifies that one arrow of size $s$ should be drawn at position $pos$ (for the arrow to
+        be on the line, $pos$ has to be between 0, i.e. the start for the line, and 1, i.e. the end
+        of the line).
+    <dt>'Arrowheads[{{$s$, $pos$, $g$}}]'
+        <dd>specifies that one arrow of size $s$ should be drawn at position $pos$ using Graphics $g$.
+    </dl>
 
     Arrows on both ends can be achieved using negative sizes:
 
@@ -1060,18 +1081,32 @@ class Arrow(Builtin):
 
     >> Graphics[{Circle[], Arrowheads[{{0.04, 1, Graphics[{Red, Disk[]}]}}], Arrow[{{0, 0}, {Cos[Pi/3],Sin[Pi/3]}}]}]
      = -Graphics-
+
+    >> Graphics[{Arrowheads[Table[{0.04, i/10,Graphics[Disk[]]},{i,1,10}]], Arrow[{{0, 0}, {5, 5}, {1, -3}, {10, 2}}]}]
+     = -Graphics-
     """
-    pass
 
-
-class Arrowheads(_GraphicsElement):
     default_size = 0.04
+
+    symbolic_sizes = {
+        'System`Tiny': 3,
+        'System`Small': 5,
+        'System`Medium': 9,
+        'System`Large': 18,
+    }
 
     def init(self, graphics, item=None):
         super(Arrowheads, self).init(graphics, item)
         if len(item.leaves) != 1:
             raise BoxConstructError
         self.spec = item.leaves[0]
+
+    def _arrow_size(self, s, extent):
+        if isinstance(s, Symbol):
+            size = self.symbolic_sizes.get(s.get_name(), 0)
+            return self.graphics.translate_absolute((size, 0))[0]
+        else:
+            return s.to_number() * extent
 
     def heads(self, extent, default_arrow, custom_arrow):
         # see https://reference.wolfram.com/language/ref/Arrowheads.html
@@ -1085,13 +1120,13 @@ class Arrowheads(_GraphicsElement):
                         raise BoxConstructError
                     size_spec = spec[0]
                     if isinstance(size_spec, Symbol) and size_spec.get_name() == 'System`Automatic':
-                        s = self.default_size
+                        s = self.default_size * extent
                     elif size_spec.is_numeric():
-                        s = size_spec.to_number()
+                        s = self._arrow_size(size_spec, extent)
                     else:
                         raise BoxConstructError
 
-                    if len(spec) == 3:
+                    if len(spec) == 3 and custom_arrow:
                         graphics = spec[2]
                         if graphics.get_head_name() != 'System`Graphics':
                             raise BoxConstructError
@@ -1099,13 +1134,13 @@ class Arrowheads(_GraphicsElement):
                     else:
                         arrow = default_arrow
 
-                    yield s * extent, spec[1].to_number(), arrow
+                    yield s, spec[1].to_number(), arrow
             else:
                 n = max(1., len(leaves) - 1.)
                 for i, head in enumerate(leaves):
-                    yield head.to_number() * extent, i / n, default_arrow
+                    yield self._arrow_size(head, extent), i / n, default_arrow
         else:
-            yield self.spec.to_number() * extent, 1, default_arrow
+            yield self._arrow_size(self.spec, extent), 1, default_arrow
 
 
 class ArrowBox(_Polyline):
@@ -1221,7 +1256,7 @@ class ArrowBox(_Polyline):
                 s = d / length
                 return (s * dx, s * dy), d
 
-        def shrink1(line, s):
+        def shrink_one_end(line, s):
             while s > 0.:
                 if len(line) < 2:
                     return []
@@ -1234,7 +1269,8 @@ class ArrowBox(_Polyline):
             return line
 
         def shrink(line, s1, s2):
-            return list(reversed(shrink1(list(reversed(shrink1(line[:], s1))), s2)))
+            return list(reversed(shrink_one_end(
+                list(reversed(shrink_one_end(line[:], s1))), s2)))
 
         def render(points, heads):  # heads has to be sorted by pos
             seg = list(segments(points))
@@ -1243,17 +1279,19 @@ class ArrowBox(_Polyline):
                 return
 
             i = 0
+            t0 = 0.
             n = len(seg)
             dl, px, py, dx, dy = seg[i]
             total = sum(segment[0] for segment in seg)
 
-            for s, t, draw in ((s, pos * total, draw) for s, pos, draw in heads):
+            for s, t, draw in ((s, pos * total - t0, draw) for s, pos, draw in heads):
                 if s == 0.:  # ignore zero-sized arrows
                     continue
 
                 if i < n:  # not yet past last segment?
                     while t > dl:  # position past current segment?
                         t -= dl
+                        t0 += dl
                         i += 1
                         if i == n:
                             px += dx  # move to last segment's end
@@ -1272,12 +1310,12 @@ class ArrowBox(_Polyline):
             # note that shrinking needs to happen in the Graphics[] coordinate space, whereas the
             # subsequent position calculation needs to happen in pixel space.
 
-            line_points = [xy.pos() for xy in shrink(line, *self.setback)]
+            transformed_points = [xy.pos() for xy in shrink(line, *self.setback)]
 
-            for s in polyline(line_points):
+            for s in polyline(transformed_points):
                 yield s
 
-            for s in render(line_points, heads):
+            for s in render(transformed_points, heads):
                 yield s
 
     def _custom_arrow(self, format, format_transform):
@@ -1318,7 +1356,7 @@ class ArrowBox(_Polyline):
             yield ' '.join('%f,%f' % xy for xy in points)
             yield '" style="%s" />' % arrow_style
 
-        extent = self.graphics.translate_relative(1.)
+        extent = self.graphics.view_width or 0
         default_arrow = self._default_arrow(polygon)
         custom_arrow = self._custom_arrow('svg', _SVGTransform)
         return ''.join(self._draw(polyline, default_arrow, custom_arrow, extent))
@@ -1338,7 +1376,7 @@ class ArrowBox(_Polyline):
             yield '--'.join(['(%.5g,%5g)' % xy for xy in points])
             yield '--cycle, % s);' % arrow_pen
 
-        extent = self.graphics.translate_relative(1.)
+        extent = self.graphics.view_width or 0
         default_arrow = self._default_arrow(polygon)
         custom_arrow = self._custom_arrow('asy', _ASYTransform)
         return ''.join(self._draw(polyline, default_arrow, custom_arrow, extent))
@@ -1358,10 +1396,10 @@ class ArrowBox(_Polyline):
             for p in points:
                 yield p
 
-        def custom_arrow(box):
-            pass
+        def default_arrow(px, py, vx, vy, t1, s):
+            yield px, py
 
-        return list(self._draw(polyline, polygon, custom_arrow, 0))
+        return list(self._draw(polyline, default_arrow, None, 0))
 
 
 class InsetBox(_GraphicsElement):
@@ -1588,6 +1626,7 @@ class GraphicsElements(_GraphicsElements):
         self.neg_y = neg_y
         self.xmin = self.ymin = self.pixel_width = None
         self.pixel_height = self.extent_width = self.extent_height = None
+        self.view_width = None
 
     def translate(self, coords):
         if self.pixel_width is not None:
@@ -1827,6 +1866,9 @@ class GraphicsBox(BoxConstruct):
         elements, calc_dimensions = self._prepare_elements(
             leaves, options, max_width=450)
 
+        xmin, xmax, ymin, ymax, w, h, width, height = calc_dimensions()
+        elements.view_width = w
+
         asy_completely_visible = '\n'.join(
             element.to_asy() for element in elements.elements
             if element.is_completely_visible)
@@ -1834,8 +1876,6 @@ class GraphicsBox(BoxConstruct):
         asy_regular = '\n'.join(
             element.to_asy() for element in elements.elements
             if not element.is_completely_visible)
-
-        xmin, xmax, ymin, ymax, w, h, width, height = calc_dimensions()
 
         tex = r"""
 \begin{asy}
@@ -1856,9 +1896,10 @@ clip(box((%s,%s), (%s,%s)));
         elements, calc_dimensions = self._prepare_elements(
             leaves, options, neg_y=True)
 
-        svg = elements.to_svg()
-
         xmin, xmax, ymin, ymax, w, h, width, height = calc_dimensions()
+        elements.view_width = w
+
+        svg = elements.to_svg()
 
         xmin -= 1
         ymin -= 1
