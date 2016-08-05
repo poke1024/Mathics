@@ -147,6 +147,24 @@ def _extract_graphics(graphics, format, evaluation):
         graphics_box.leaves, {'evaluation': evaluation}, neg_y=True)
     xmin, xmax, ymin, ymax, _, _, _, _ = calc_dimensions()
 
+    # xmin, xmax have always been moved to 0 here. the untransformed
+    # and unscaled bounds are found in elements.xmin, elements.ymin,
+    # elements.extent_width, elements.extent_height.
+
+    # now compute the position of origin (0, 0) in the transformed
+    # coordinate space.
+
+    ex = elements.extent_width
+    ey = elements.extent_height
+
+    sx = (xmax - xmin) / ex
+    sy = (ymax - ymin) / ey
+
+    ox = -elements.xmin * sx + xmin
+    oy = -elements.ymin * sy + ymin
+
+    # generate code for svg or asy.
+
     if format == 'asy':
         code = '\n'.join(element.to_asy() for element in elements.elements)
     elif format == 'svg':
@@ -154,7 +172,7 @@ def _extract_graphics(graphics, format, evaluation):
     else:
         raise NotImplementedError
 
-    return xmin, xmax, ymin, ymax, code
+    return xmin, xmax, ymin, ymax, ox, oy, ex, ey, code
 
 
 class _SVGTransform():
@@ -1320,21 +1338,21 @@ class ArrowBox(_Polyline):
 
     def _custom_arrow(self, format, format_transform):
         def make(graphics):
-            xmin, xmax, ymin, ymax, code = _extract_graphics(
+            xmin, xmax, ymin, ymax, ox, oy, ex, ey, code = _extract_graphics(
                 graphics, format, self.graphics.evaluation)
             boxw = xmax - xmin
             boxh = ymax - ymin
 
             def draw(px, py, vx, vy, t1, s):
-                t0 = t1 - s / 2.
+                t0 = t1
                 cx = px + t0 * vx
                 cy = py + t0 * vy
 
                 transform = format_transform()
                 transform.translate(cx, cy)
-                transform.scale(s / boxw, s / boxh)
-                transform.rotate(degrees(atan2(vy, vx)))
-                transform.translate(-(xmin + xmax) / 2., -(ymin + ymax) / 2.)
+                transform.scale(-s / boxw * ex, -s / boxh * ey)
+                transform.rotate(90 + degrees(atan2(vy, vx)))
+                transform.translate(-ox, -oy)
                 yield transform.apply(code)
 
             return draw
