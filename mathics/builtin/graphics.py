@@ -175,6 +175,79 @@ def _extract_graphics(graphics, format, evaluation):
     return xmin, xmax, ymin, ymax, ox, oy, ex, ey, code
 
 
+def _to_float(x):
+    if isinstance(x, Integer):
+        return x.get_int_value()
+    else:
+        y = x.round_to_float()
+        if y is None:
+            raise BoxConstructError
+        return y
+
+
+class _Transform():
+    def __init__(self, f):
+        if not isinstance(f, Expression):
+            self.matrix = f
+            return
+
+        if f.get_head_name() != 'System`TransformationFunction':
+            raise BoxConstructError
+
+        if len(f.leaves) != 1 or f.leaves[0].get_head_name() != 'System`List':
+            raise BoxConstructError
+
+        rows = f.leaves[0].leaves
+        if len(rows) != 3:
+            raise BoxConstructError
+        if any(row.get_head_name() != 'System`List' for row in rows):
+            raise BoxConstructError
+        if any(len(row.leaves) != 3 for row in rows):
+            raise BoxConstructError
+
+        self.matrix = [[_to_float(x) for x in row.leaves] for row in rows]
+
+    def scaled(self, x, y):
+        # we compute AB, where A is the scale matrix (x, y, 1) and B is
+        # self.matrix
+        m = self.matrix
+        return _Transform([[t * x for t in m[0]], [t * y for t in m[1]], m[2]])
+
+    def transform(self, p):
+        m = self.matrix
+
+        m11 = m[0][0]
+        m12 = m[0][1]
+        m13 = m[0][2]
+
+        m21 = m[1][0]
+        m22 = m[1][1]
+        m23 = m[1][2]
+
+        for x, y in p:
+            yield m11 * x + m12 * y + m13, m21 * x + m22 * y + m23
+
+    def to_svg(self, svg):
+        m = self.matrix
+
+        a = m[0][0]
+        b = m[1][0]
+        c = m[0][1]
+        d = m[1][1]
+        e = m[0][2]
+        f = m[1][2]
+
+        if m[2][0] != 0. or m[2][1] != 0. or m[2][2] != 1.:
+            raise BoxConstructError
+
+        # a c e
+        # b d f
+        # 0 0 1
+
+        t = 'matrix(%f, %f, %f, %f, %f, %f)' % (a, b, c, d, e, f)
+        return '<g transform="%s">%s</g>' % (t, svg)
+
+
 class _SVGTransform():
     def __init__(self):
         self.transforms = []
@@ -287,6 +360,10 @@ class Graphics(Builtin):
                 return Expression('List',
                                   *[convert(item) for item in content.leaves])
             head = content.get_head_name()
+
+            if head == 'System`GeometricTransformation' and len(content.leaves) == 2:
+                return Expression('GeometricTransformationBox', convert(content.leaves[0]), content.leaves[1])
+
             if head in element_heads:
                 if head == 'System`Text':
                     head = 'System`Inset'
@@ -1420,6 +1497,134 @@ class ArrowBox(_Polyline):
         return list(self._draw(polyline, default_arrow, None, 0))
 
 
+class TransformationFunction(Builtin):
+    pass
+
+
+class TranslationTransform(Builtin):
+    """
+    <dl>
+    <dt>'TranslationTransform[v]'
+        <dd>gives the translation by the vector $v$.
+    </dl>
+
+    >> TranslationTransform[{1, 2}]
+     = TransformationFunction[{{1, 0, 1}, {0, 1, 2}, {0, 0, 1}}]
+    """
+    rules = {
+        'TranslationTransform[v_]': 'TransformationFunction[IdentityMatrix[Length[v] + 1] + '
+            '(Join[ConstantArray[0, Length[v]], {#}]& /@ Join[v, {0}])]',
+    }
+
+
+class Translate(Builtin):
+    """
+    <dl>
+    <dt>'Translate[g, {x, y}]'
+        <dd>translates an object by the specified amount.
+    <dt>'Translate[g, {{x1, y1}, {x2, y2}, ...}]'
+        <dd>creates multiple instances of object translated by the specified amounts.
+    </dl>
+
+    >> Graphics[{Circle[], Translate[Circle[], {1, 0}]}]
+     = -Graphics-
+    """
+
+    rules = {
+        'Translate[g_, v_]': 'GeometricTransformation[g, TranslationTransform[v]]',
+    }
+
+
+class GeometricTransformation(Builtin):
+    """
+    <dl>
+    <dt>'GeometricTransformation[g, tfm]'
+        <dd>transforms an object by the given transformation.
+    </dl>
+    """
+    pass
+
+
+class GeometricTransformationBox(_GraphicsElement):
+    def init(self, graphics, style, contents, transform):
+        super(GeometricTransformationBox, self).init(graphics, None, style)
+        self.contents = contents
+        if transform.get_head_name() == 'System`List':
+            functions = transform.leaves
+        else:
+            functions = [transform]
+        self.transforms = [_Transform(f) for f in functions]
+
+    def extent(self):
+        def points():
+            graphics = self.graphics
+            for content in self.contents:
+                for transform in self.transforms:
+                    p = content.extent()
+                    for q in graphics.fix_transform(transform).transform(p):
+                        yield q
+        return list(points())
+
+    def to_svg(self):
+        def instances():
+            graphics = self.graphics
+            for content in self.contents:
+                content_svg = content.to_svg()
+                for transform in self.transforms:
+                    yield graphics.fix_transform(transform).to_svg(content_svg)
+        return ''.join(instances())
+
+
+class Rotate(Builtin):
+    """
+    <dl>
+    <dt>'Rotate[g, phi]'
+        <dd>rotates an object by the specified amount phi.
+    </dl>
+
+    >> Graphics[{Circle[], Translate[Circle[], {1, 0}]}]
+     = -Graphics-
+    """
+    pass
+
+
+class RotateBox(_GraphicsElement):
+    def init(self, graphics, style, contents, translate):
+        super(RotateBox, self).init(graphics, None, style)
+        self.contents = contents
+        if translate.get_head_name() != 'System`List':
+            raise BoxConstructError
+        if not translate.leaves:
+            self.offsets = []
+        elif translate.leaves[0].get_head_name() == 'System`List':
+            self.offsets = [Coords(graphics, leaf) for leaf in translate.leaves]
+        else:
+            self.offsets = [Coords(graphics, translate)]
+
+    def extent(self):
+        def points():
+            x0, y0 = Coords(self.graphics, Expression('List', 0, 0)).pos()
+            for content in self.contents:
+                for x, y in content.extent():
+                    for offset in self.offsets:
+                        x1, y1 = offset.pos()
+                        yield x, y
+                        yield x + (x1 - x0), y + (y1 - y0)
+        return list(points())
+
+    def to_svg(self):
+        def instances():
+            x0, y0 = Coords(self.graphics, Expression('List', 0, 0)).pos()
+            for content in self.contents:
+                content_svg = content.to_svg()
+                for offset in self.offsets:
+                    x1, y1 = offset.pos()
+                    transform = _SVGTransform()
+                    transform.translate(x1 - x0, y1 - y0)
+                    yield transform.apply(content_svg)
+        return ''.join(instances())
+
+
 class InsetBox(_GraphicsElement):
     def init(self, graphics, style, item=None, content=None, pos=None,
              opos=(0, 0)):
@@ -1591,7 +1796,6 @@ class Style(object):
 class _GraphicsElements(object):
     def __init__(self, content, evaluation):
         self.evaluation = evaluation
-        self.elements = []
 
         def convert(content, style):
             if content.has_form('List', None):
@@ -1605,19 +1809,21 @@ class _GraphicsElements(object):
                 head = item.get_head_name()
                 if head in style_heads or head in ('System`EdgeForm', 'System`FaceForm'):
                     style.append(item)
+                elif head == 'System`GeometricTransformationBox':
+                    yield GeometricTransformationBox(self, style, list(convert(item.leaves[0], style)), item.leaves[1])
                 elif head[-3:] == 'Box':  # and head[:-3] in element_heads:
                     element_class = get_class(head)
                     if element_class is not None:
-                        element = get_class(head)(self, style, item)
-                        self.elements.append(element)
+                        yield get_class(head)(self, style, item)
                     else:
                         raise BoxConstructError
                 elif head == 'System`List':
-                    convert(item, style)
+                    for element in convert(item, style):
+                        yield element
                 else:
                     raise BoxConstructError
 
-        convert(content, self.get_style_class()(self))
+        self.elements = list(convert(content, self.get_style_class()(self)))
 
     def create_style(self, expr):
         style = self.get_style_class()(self)
@@ -1645,6 +1851,16 @@ class GraphicsElements(_GraphicsElements):
         self.xmin = self.ymin = self.pixel_width = None
         self.pixel_height = self.extent_width = self.extent_height = None
         self.view_width = None
+
+    def fix_transform(self, transform):
+        if self.pixel_width is not None:
+            w = self.extent_width if self.extent_width > 0 else 1
+            h = self.extent_height if self.extent_height > 0 else 1
+            x = self.pixel_width / w
+            y = self.pixel_height / h
+            return transform.scaled(x, y)
+        else:
+            return transform
 
     def translate(self, coords):
         if self.pixel_width is not None:
