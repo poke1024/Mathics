@@ -208,10 +208,12 @@ class _Transform():
         self.matrix = [[_to_float(x) for x in row.leaves] for row in rows]
 
     def scaled(self, x, y):
-        # we compute AB, where A is the scale matrix (x, y, 1) and B is
-        # self.matrix
+        # we compute ABC, where A is the scale matrix (x, y, 1), C is the
+        # scale matrix (1 / x, 1 / y, 1) and B is self.matrix.
         m = self.matrix
-        return _Transform([[t * x for t in m[0]], [t * y for t in m[1]], m[2]])
+        ab = [[t * x for t in m[0]], [t * y for t in m[1]], m[2]]
+        s = (1. / x, 1. / y, 1.)
+        return _Transform([[s[i] * t for i, t in enumerate(row)] for row in ab])
 
     def transform(self, p):
         m = self.matrix
@@ -246,6 +248,38 @@ class _Transform():
 
         t = 'matrix(%f, %f, %f, %f, %f, %f)' % (a, b, c, d, e, f)
         return '<g transform="%s">%s</g>' % (t, svg)
+
+    def to_asy(self, asy):
+        m = self.matrix
+
+        a = m[0][0]
+        b = m[1][0]
+        c = m[0][1]
+        d = m[1][1]
+        e = m[0][2]
+        f = m[1][2]
+
+        if m[2][0] != 0. or m[2][1] != 0. or m[2][2] != 1.:
+            raise BoxConstructError
+
+        # a c e
+        # b d f
+        # 0 0 1
+        # see http://asymptote.sourceforge.net/doc/Transforms.html#Transforms
+        t = '(%f, %f, %f, %f, %f, %f)' % (e, f, a, c, b, d)
+
+        template = """
+        add(%s * (new picture() {
+            picture saved = currentpicture;
+            picture transformed = new picture;
+            currentpicture = transformed;
+            %s
+            currentpicture = saved;
+            return transformed;
+        })());
+        """
+
+        return template % (t, asy)
 
 
 class _SVGTransform():
@@ -1498,7 +1532,18 @@ class ArrowBox(_Polyline):
 
 
 class TransformationFunction(Builtin):
-    pass
+    """
+    >> RotationTransform[Pi].TranslationTransform[{1, -1}]
+     = TransformationFunction[{{-1, 0, -1}, {0, -1, 1}, {0, 0, 1}}]
+
+    >> TranslationTransform[{1, -1}].RotationTransform[Pi]
+     = TransformationFunction[{{-1, 0, 1}, {0, -1, -1}, {0, 0, 1}}]
+    """
+
+    rules = {
+        'Dot[TransformationFunction[a_], TransformationFunction[b_]]': 'TransformationFunction[a . b]',
+        'TransformationFunction[m_][v_]': 'Take[m . Join[v, {0}], Length[v]]',
+    }
 
 
 class TranslationTransform(Builtin):
@@ -1511,9 +1556,29 @@ class TranslationTransform(Builtin):
     >> TranslationTransform[{1, 2}]
      = TransformationFunction[{{1, 0, 1}, {0, 1, 2}, {0, 0, 1}}]
     """
+
     rules = {
-        'TranslationTransform[v_]': 'TransformationFunction[IdentityMatrix[Length[v] + 1] + '
+        'TranslationTransform[v_]':
+            'TransformationFunction[IdentityMatrix[Length[v] + 1] + '
             '(Join[ConstantArray[0, Length[v]], {#}]& /@ Join[v, {0}])]',
+    }
+
+
+class RotationTransform(Builtin):
+    rules = {
+        'RotationTransform[phi_]':
+            'TransformationFunction[{{Cos[phi], -Sin[phi], 0}, {Sin[phi], Cos[phi], 0}, {0, 0, 1}}]',
+        'RotationTransform[phi_, p_]':
+            'TranslationTransform[-p] . RotationTransform[phi] . TranslationTransform[p]',
+    }
+
+
+class ScalingTransform(Builtin):
+    rules = {
+        'ScalingTransform[v_]':
+            'TransformationFunction[DiagonalMatrix[Join[v, {1}]]]',
+        'ScalingTransform[v_, p_]':
+            'TranslationTransform[-p] . ScalingTransform[v] . TranslationTransform[p]',
     }
 
 
@@ -1531,7 +1596,44 @@ class Translate(Builtin):
     """
 
     rules = {
-        'Translate[g_, v_]': 'GeometricTransformation[g, TranslationTransform[v]]',
+        'Translate[g_, v_?(Depth[#] > 2&)]': 'GeometricTransformation[g, TranslationTransform /@ v]',
+        'Translate[g_, v_?(Depth[#] == 2&)]': 'GeometricTransformation[g, TranslationTransform[v]]',
+    }
+
+
+class Rotate(Builtin):
+    """
+    <dl>
+    <dt>'Rotate[g, phi]'
+        <dd>rotates an object by the specified amount.
+    </dl>
+
+    >> Graphics[Rotate[Rectangle[], Pi / 3]]
+     = -Graphics-
+    """
+
+    rules = {
+        'Rotate[g_, phi_]': 'GeometricTransformation[g, RotationTransform[phi]]',
+        'Rotate[g_, phi_, p_]': 'GeometricTransformation[g, RotationTransform[phi, p]]',
+    }
+
+
+class Scale(Builtin):
+    """
+    <dl>
+    <dt>'Scale[g, phi]'
+        <dd>scales an object by the specified amount.
+    </dl>
+
+    >> Graphics[Rotate[Rectangle[], Pi / 3]]
+     = -Graphics-
+    """
+
+    rules = {
+        'Scale[g_, s_?ListQ]': 'GeometricTransformation[g, ScalingTransform[s]]',
+        'Scale[g_, s_]': 'GeometricTransformation[g, ScalingTransform[{s, s}]]',
+        'Scale[g_, s_?ListQ, p_]': 'GeometricTransformation[g, ScalingTransform[s, p]]',
+        'Scale[g_, s_, p_]': 'GeometricTransformation[g, ScalingTransform[{s, s}, p]]',
     }
 
 
@@ -1553,7 +1655,8 @@ class GeometricTransformationBox(_GraphicsElement):
             functions = transform.leaves
         else:
             functions = [transform]
-        self.transforms = [_Transform(f) for f in functions]
+        evaluation = graphics.evaluation
+        self.transforms = [_Transform(Expression('N', f).evaluate(evaluation)) for f in functions]
 
     def extent(self):
         def points():
@@ -1574,54 +1677,13 @@ class GeometricTransformationBox(_GraphicsElement):
                     yield graphics.fix_transform(transform).to_svg(content_svg)
         return ''.join(instances())
 
-
-class Rotate(Builtin):
-    """
-    <dl>
-    <dt>'Rotate[g, phi]'
-        <dd>rotates an object by the specified amount phi.
-    </dl>
-
-    >> Graphics[{Circle[], Translate[Circle[], {1, 0}]}]
-     = -Graphics-
-    """
-    pass
-
-
-class RotateBox(_GraphicsElement):
-    def init(self, graphics, style, contents, translate):
-        super(RotateBox, self).init(graphics, None, style)
-        self.contents = contents
-        if translate.get_head_name() != 'System`List':
-            raise BoxConstructError
-        if not translate.leaves:
-            self.offsets = []
-        elif translate.leaves[0].get_head_name() == 'System`List':
-            self.offsets = [Coords(graphics, leaf) for leaf in translate.leaves]
-        else:
-            self.offsets = [Coords(graphics, translate)]
-
-    def extent(self):
-        def points():
-            x0, y0 = Coords(self.graphics, Expression('List', 0, 0)).pos()
-            for content in self.contents:
-                for x, y in content.extent():
-                    for offset in self.offsets:
-                        x1, y1 = offset.pos()
-                        yield x, y
-                        yield x + (x1 - x0), y + (y1 - y0)
-        return list(points())
-
-    def to_svg(self):
+    def to_asy(self):
         def instances():
-            x0, y0 = Coords(self.graphics, Expression('List', 0, 0)).pos()
+            graphics = self.graphics
             for content in self.contents:
-                content_svg = content.to_svg()
-                for offset in self.offsets:
-                    x1, y1 = offset.pos()
-                    transform = _SVGTransform()
-                    transform.translate(x1 - x0, y1 - y0)
-                    yield transform.apply(content_svg)
+                content_asy = content.to_asy()
+                for transform in self.transforms:
+                    yield graphics.fix_transform(transform).to_asy(content_asy)
         return ''.join(instances())
 
 
