@@ -1211,7 +1211,7 @@ class Arrowheads(_GraphicsElement):
     >> Graphics[{Circle[], Arrowheads[{{0.04, 1, Graphics[{Red, Disk[]}]}}], Arrow[{{0, 0}, {Cos[Pi/3],Sin[Pi/3]}}]}]
      = -Graphics-
 
-    >> Graphics[{Arrowheads[Table[{0.04, i/10,Graphics[Disk[]]},{i,1,10}]], Arrow[{{0, 0}, {5, 5}, {1, -3}, {10, 2}}]}]
+    >> Graphics[{Arrowheads[Table[{0.02, i/10,Graphics[Disk[]]},{i,1,10}]], Arrow[{{0, 0}, {6, 5}, {1, -3}, {-2, 2}}]}]
      = -Graphics-
     """
 
@@ -1235,7 +1235,7 @@ class Arrowheads(_GraphicsElement):
             size = self.symbolic_sizes.get(s.get_name(), 0)
             return self.graphics.translate_absolute((size, 0))[0]
         else:
-            return s.to_number() * extent
+            return s.round().get_float_value() * extent
 
     def heads(self, extent, default_arrow, custom_arrow):
         # see https://reference.wolfram.com/language/ref/Arrowheads.html
@@ -1263,7 +1263,7 @@ class Arrowheads(_GraphicsElement):
                     else:
                         arrow = default_arrow
 
-                    yield s, spec[1].to_number(), arrow
+                    yield s, spec[1].round().get_float_value(), arrow
             else:
                 n = max(1., len(leaves) - 1.)
                 for i, head in enumerate(leaves):
@@ -1299,9 +1299,9 @@ class ArrowBox(_Polyline):
             leaves = expr.leaves
             if len(leaves) != 2:
                 raise BoxConstructError
-            return tuple(max(l.to_number(), 0.) for l in leaves)
+            return tuple(max(l.round().get_float_value(), 0.) for l in leaves)
         else:
-            s = max(expr.to_number(), 0.)
+            s = max(expr.round().get_float_value(), 0.)
             return s, s
 
     @staticmethod
