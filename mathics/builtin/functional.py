@@ -14,6 +14,52 @@ from mathics.builtin.base import Builtin, PostfixOperator
 from mathics.core.expression import Expression
 
 
+def _slot_function_call(body, args, evaluation):
+    args.insert(0, Expression('Function', body))
+    return body.replace_slots(args, evaluation)
+
+
+def _vars_function_call(body, vars, args, evaluation):
+    if len(vars) > len(args):
+        evaluation.message('Function', 'fpct', )
+    else:
+        vars = dict(list(zip((
+            var.get_name() for var in vars), args[:len(vars)])))
+        return body.replace_vars(vars)
+
+
+def function_call(f, evaluation):
+    if isinstance(f, Identity):
+        def make(*args):
+            if len(args) == 1:
+                return args[0]
+            else:
+                return Expression('Sequence', *args)
+    elif f.get_head_name() == 'System`Function' and len(f.leaves) in (1, 2):
+        n = len(f.leaves)
+        if n == 1:  # Function[body_][args___]
+            body = f.leaves[0]
+
+            def make(*args):
+                args = list(args)
+                return _slot_function_call(body, args, evaluation)
+
+        else:  # Function[vars_, body_][args___]
+            vars, body = f.leaves
+            if vars.has_form('List', None):
+                vars = vars.leaves
+            else:
+                vars = [vars]
+
+            def make(*args):
+                return _vars_function_call(body, vars, args, evaluation)
+    else:
+        def make(*args):
+            return Expression(f, *args)
+
+    return make
+
+
 class Function(PostfixOperator):
     """
     <dl>
@@ -71,8 +117,7 @@ class Function(PostfixOperator):
         'Function[body_][args___]'
 
         args = args.get_sequence()
-        args.insert(0, Expression('Function', body))
-        return body.replace_slots(args, evaluation)
+        return _slot_function_call(body, args, evaluation)
 
     def apply_named(self, vars, body, args, evaluation):
         'Function[vars_, body_][args___]'
@@ -83,12 +128,7 @@ class Function(PostfixOperator):
             vars = [vars]
 
         args = args.get_sequence()
-        if len(vars) > len(args):
-            evaluation.message('Function', 'fpct', )
-        else:
-            vars = dict(list(zip((
-                var.get_name() for var in vars), args[:len(vars)])))
-            return body.replace_vars(vars)
+        return _vars_function_call(body, vars, args, evaluation)
 
 
 class Slot(Builtin):

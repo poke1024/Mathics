@@ -12,7 +12,7 @@ from mathics.core.rules import Pattern
 
 from mathics.builtin.lists import (python_levelspec, walk_levels,
                                    InvalidLevelspecError)
-from mathics.builtin.functional import Identity
+from mathics.builtin.functional import Identity, function_call
 import six
 from six.moves import range
 
@@ -205,7 +205,7 @@ class BinarySearch(Builtin):
             return Symbol('$Aborted')
 
         # "transform" is a handy wrapper for applying "f" or nothing
-        transform = (lambda x: x) if isinstance(f, Identity) else (lambda x: Expression(f, x).evaluate(evaluation))
+        transform = function_call(f, evaluation)
 
         # loop invariants (true at any time in the following loop):
         # (1) lower_index <= upper_index
@@ -414,11 +414,13 @@ class Apply(BinaryOperator):
             evaluation.message('Apply', 'level', ls)
             return
 
+        call_f = function_call(f, evaluation)
+
         def callback(level):
             if level.is_atom():
                 return level
             else:
-                return Expression(f, *level.leaves)
+                return call_f(*level.leaves)
 
         heads = self.get_option(options, 'Heads', evaluation).is_true()
         result, depth = walk_levels(
@@ -477,8 +479,7 @@ class Map(BinaryOperator):
             evaluation.message('Map', 'level', ls)
             return
 
-        def callback(level):
-            return Expression(f, level)
+        callback = function_call(f, evaluation)
 
         heads = self.get_option(options, 'Heads', evaluation).is_true()
         result, depth = walk_levels(
@@ -536,8 +537,10 @@ class Scan(Builtin):
             evaluation.message('Map', 'level', ls)
             return
 
+        call_f = function_call(f, evaluation)
+
         def callback(level):
-            Expression(f, level).evaluate(evaluation)
+            call_f(level).evaluate(evaluation)
             return level
 
         heads = self.get_option(options, 'Heads', evaluation).is_true()
@@ -606,8 +609,10 @@ class MapIndexed(Builtin):
             evaluation.message('MapIndexed', 'level', ls)
             return
 
+        call_f = function_call(f, evaluation)
+
         def callback(level, pos):
-            return Expression(f, level, Expression('List', *[
+            return call_f(level, Expression('List', *[
                 Integer(p) for p in pos]))
 
         heads = self.get_option(options, 'Heads', evaluation).is_true()
@@ -690,10 +695,12 @@ class MapThread(Builtin):
 
         heads = expr.get_leaves()
 
+        call_f = function_call(f, evaluation)
+
         def walk(args, depth=0):
             'walk all trees concurrently and build result'
             if depth == n:
-                return Expression(f, *args)
+                return call_f(*args)
             else:
                 dim = None
                 for i, arg in enumerate(args):
