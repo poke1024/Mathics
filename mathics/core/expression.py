@@ -62,6 +62,54 @@ def system_symbols_dict(d):
     return {ensure_context(k): v for k, v in six.iteritems(d)}
 
 
+def form(heads, *leaf_counts):
+    """
+    leaf_counts:
+        (,):        no leaves allowed
+        (None,):    no constraint on number of leaves
+        (n, None):  leaf count >= n
+        (n1, n2, ...):    leaf count in {n1, n2, ...}
+    """
+
+    if isinstance(heads, (tuple, list, set)):
+        head_forms = set([ensure_context(h) for h in heads])
+
+        def match_head(name):
+            return name in head_forms
+    else:
+        head_form = ensure_context(heads)
+
+        def match_head(name):
+            return name == head_form
+
+    if not leaf_counts:  # (,)
+        def match_leaves(count):
+            return count == 0
+    elif leaf_counts[0] is None:  # (None,)
+        def match_leaves(count):
+            return True
+    elif len(leaf_counts) == 2 and leaf_counts[1] is None:  # (n, None)
+        n = leaf_counts[0]
+
+        def match_leaves(count):
+            return count >= n
+    elif len(leaf_counts) == 1:  # (n1,)
+        n = leaf_counts[0]
+
+        def match_leaves(count):
+            return count == n
+    else:  # (n1, n2, ...)
+        leaf_counts = set(leaf_counts)
+
+        def match_leaves(count):
+            return count in leaf_counts
+
+    def match(x):
+        return x.match_form(match_head, match_leaves)
+
+    return match
+
+
 class BoxError(Exception):
     def __init__(self, box, form):
         super(BoxError, self).__init__(
@@ -544,6 +592,9 @@ class Expression(BaseExpression):
 
     def get_lookup_name(self):
         return self.head.get_lookup_name()
+
+    def match_form(self, match_head, match_leaves):
+        return match_head(self.head.get_name()) and match_leaves(len(self.leaves))
 
     def has_form(self, heads, *leaf_counts):
         """
@@ -1280,6 +1331,9 @@ class Atom(BaseExpression):
 
     def is_atom(self):
         return True
+
+    def match_form(self, match_head, match_leaves):
+        return match_leaves(0) and match_head(self.get_atom_name)
 
     def has_form(self, heads, *leaf_counts):
         if leaf_counts:
