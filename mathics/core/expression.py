@@ -73,39 +73,33 @@ def form(heads, *leaf_counts):
 
     if isinstance(heads, (tuple, list, set)):
         head_forms = set([ensure_context(h) for h in heads])
-
-        def match_head(name):
-            return name in head_forms
     else:
-        head_form = ensure_context(heads)
-
-        def match_head(name):
-            return name == head_form
+        head_forms = (ensure_context(heads),)
 
     if not leaf_counts:  # (,)
-        def match_leaves(count):
-            return count == 0
+        def match_form(head, leaves):
+            return leaves == 0 and head in head_forms
     elif leaf_counts[0] is None:  # (None,)
-        def match_leaves(count):
-            return True
+        def match_form(head, leaves):
+            return head in head_forms
     elif len(leaf_counts) == 2 and leaf_counts[1] is None:  # (n, None)
         n = leaf_counts[0]
 
-        def match_leaves(count):
-            return count >= n
+        def match_form(head, leaves):
+            return leaves >= n and head in head_forms
     elif len(leaf_counts) == 1:  # (n1,)
         n = leaf_counts[0]
 
-        def match_leaves(count):
-            return count == n
+        def match_form(head, leaves):
+            return leaves == n and head in head_forms
     else:  # (n1, n2, ...)
         leaf_counts = set(leaf_counts)
 
-        def match_leaves(count):
-            return count in leaf_counts
+        def match_form(head, leaves):
+            return head in head_forms and leaves in leaf_counts
 
     def match(x):
-        return x.match_form(match_head, match_leaves)
+        return x.match_form(match_form)
 
     return match
 
@@ -593,8 +587,8 @@ class Expression(BaseExpression):
     def get_lookup_name(self):
         return self.head.get_lookup_name()
 
-    def match_form(self, match_head, match_leaves):
-        return match_head(self.head.get_name()) and match_leaves(len(self.leaves))
+    def match_form(self, match):
+        return match(self.head.get_name(), len(self.leaves))
 
     def has_form(self, heads, *leaf_counts):
         """
@@ -1332,8 +1326,8 @@ class Atom(BaseExpression):
     def is_atom(self):
         return True
 
-    def match_form(self, match_head, match_leaves):
-        return match_leaves(0) and match_head(self.get_atom_name)
+    def match_form(self, match):
+        return match(self.get_atom_name(), 0)
 
     def has_form(self, heads, *leaf_counts):
         if leaf_counts:
