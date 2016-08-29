@@ -16,6 +16,93 @@ import mathics
 from mathics import server_version_string, license_string
 from mathics import settings as mathics_settings  # Prevents UnboundLocalError
 
+from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
+import json
+import queue
+from threading import Thread
+
+
+class EvaluationThread(Thread):
+    def __init__(self, request):
+        super(EvaluationThread, self).__init__(target=self.run, args=())
+        self.evaluation_request = request
+        self.output = queue.Queue(1)
+        self.input = queue.Queue(1)
+        self.done = False
+
+    # the evaluation thread's main method.
+
+    def run(self):
+        from mathics.web.views import query
+        response = query(self.evaluation_request['what'], self)
+        print('sending response for display')
+        self.done = True
+        self.display(self.evaluation_request['id'], response)
+
+    # methods called by MathicsWebSocket.
+
+    def feed(self, message):
+        command = message['command']
+        if command == 'svg':
+            print('got svg', message['svg'])
+            self.input.put(message['svg'])
+
+    def read(self):
+        return self.output.get()
+
+    # methods called by evaluation thread itself.
+
+    def mathml_to_svg(self, mathml):
+        self.output.put(json.dumps({'command': 'mathml_to_svg', 'mathml': mathml}))
+        print('mathml_to_svg: waiting for response')
+        svg = self.input.get()
+        print('svg to caller', svg)
+        return svg
+
+    def display(self, id, response):
+        self.output.put(json.dumps({'command': 'display', 'id': id, 'response': response}))
+
+
+class MathicsWebSocket(WebSocket):
+    def __init__(self, *args):
+        super(MathicsWebSocket, self).__init__(*args)
+        self.evaluation_thread = None
+
+    def handleConnected(self):
+        pass
+
+    def handleMessage(self):
+        print('handleMessage', self.data)
+
+        message = json.loads(self.data)
+
+        if self.evaluation_thread:
+            self.evaluation_thread.feed(message)
+        else:
+            command = message['command']
+            if command == 'evaluate':
+                print('eval', message['what'])
+                self.evaluation_thread = EvaluationThread(message)
+                self.evaluation_thread.start()
+            else:
+                return  # error
+
+        self.sendMessage(self.evaluation_thread.read())
+        print('handleMessage: sent message')
+
+        if self.evaluation_thread.done:
+            self.evaluation_thread.join()
+            self.evaluation_thread = None
+
+        print('handleMessage: leaving')
+
+    def handleClose(self):
+        print(self.address, 'closed')
+
+#server = SimpleWebSocketServer('localhost', 9000, MathicsWebSocket)
+#thread = Thread(target=server.serveforever, args=())
+#thread.start()
+
 
 def check_database():
     # Check for the database
@@ -87,10 +174,15 @@ http://localhost:%d\nin Firefox, Chrome, or Safari to use Mathics\n""" % port)
         addr = '127.0.0.1'
 
     try:
-        from django.core.servers.basehttp import (
-            run, get_internal_wsgi_application)
-        handler = get_internal_wsgi_application()
-        run(addr, port, handler)
+        #from django.core.servers.basehttp import (
+        #    run, get_internal_wsgi_application)
+        #handler = get_internal_wsgi_application()
+        #run(addr, port, handler)
+
+        from django.core.management import call_command
+        from django.core.wsgi import get_wsgi_application
+        application = get_wsgi_application()
+        call_command('runserver', '%s:%d' % (addr, port))
     except socket.error as e:
         # Use helpful error messages instead of ugly tracebacks.
         ERRORS = {

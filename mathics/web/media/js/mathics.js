@@ -1,3 +1,104 @@
+// test Django websockets
+
+socket = new WebSocket("ws://" + window.location.host + "/");
+socket.onmessage = function(e) {
+    alert(e.data);
+}
+socket.onopen = function() {
+    socket.send("hello world");
+}
+
+
+var notebook = function() {
+    function display(textarea, response) {
+        textarea.ul.select('li[class!=request][class!=submitbutton]').invoke('deleteElement');
+        if (!response) {
+            // A fatal Python error has occurred, e.g. on 4.4329408320439^43214234345
+            // ("Fatal Python error: mp_reallocate failure")
+            // -> print overflow message
+            var responseText = '{"results": [{"out": [{"prefix": "General::noserver", "message": true, "tag": "noserver", "symbol": "General", "text": "<math><mrow><mtext>No server running.</mtext></mrow></math>"}]}]}';
+            response = JSON.parse(responseText);
+        }
+        setResult(textarea.ul, response.results);
+        textarea.submitted = true;
+        textarea.results = response.results;
+        var next = textarea.li.nextSibling;
+        if (next)
+            next.textarea.focus();
+        else
+            createQuery();
+    }
+
+    return {
+        'display': display
+    };
+}();
+
+function createWebSocketKernel() {
+    function mathMLToSVG(math, callback) {
+        var container = document.createElement("span");
+        container.innerHTML = math;
+
+        MathJax.Hub.Queue(
+            ["setRenderer",MathJax.Hub,"SVG"],
+            ["Typeset",MathJax.Hub,container],
+            function() {
+                var svg = container.querySelectorAll('svg')
+                callback(svg[0]);
+            });
+    }
+
+    var outputId = 1;
+
+    function uniqueOutputId(textarea) {
+        outputId += 1;
+        var id = 'OUTPUT_' + outputId;
+        textarea.id = id;
+        return id;
+    }
+
+    var websocket = new WebSocket('ws://localhost:9000/');
+
+    websocket.onopen = function(evt) {
+    };
+
+    websocket.onclose = function(evt) {
+    };
+
+    websocket.onmessage = function(evt) {
+        // alert('got message ' + evt.data);
+        var data = JSON.parse(evt.data);
+        var command = data['command'];
+        if (command == 'mathml_to_svg') {
+            mathMLToSVG(data['mathml'], function(svg) {
+                // alert('sending svg ' + svg.outerHTML);
+                websocket.send(JSON.stringify({'command': 'svg', 'svg': svg.outerHTML}));
+            });
+        } else if (command == 'display') {
+            var textarea = document.getElementById(data['id']);
+            if (textarea) {
+                notebook.display(textarea, data['response']);
+            }
+        }
+    };
+
+    websocket.onerror = function(evt) {
+        websocket.close();
+    };
+
+    function evaluate(textarea) {
+        textarea.li.addClassName('loading');
+        websocket.send(JSON.stringify({'command': 'evaluate', 'what': textarea.value, 'id': uniqueOutputId(textarea)}));
+    }
+
+    return {
+        'evaluate': evaluate
+    };
+};
+
+var kernel = createWebSocketKernel();
+// var kernel = createAjaxKernel();
+
 var deleting;
 var blurredElement;
 
@@ -383,30 +484,24 @@ function setResult(ul, results) {
 
 function submitQuery(textarea, onfinish) {
 	$('welcomeContainer').fade({duration: 0.5});
-	
-	textarea.li.addClassName('loading');
+
+	kernel.evaluate(textarea);
+
+	/*textarea.li.addClassName('loading');
+
 	new Ajax.Request('/ajax/query/', {
 		method: 'post',
 		parameters: {
 			query: textarea.value
 		},
 		onSuccess: function(transport) {
-			textarea.ul.select('li[class!=request][class!=submitbutton]').invoke('deleteElement');
-			if (!transport.responseText) {
-				// A fatal Python error has occurred, e.g. on 4.4329408320439^43214234345
-				// ("Fatal Python error: mp_reallocate failure")
-				// -> print overflow message
-				transport.responseText = '{"results": [{"out": [{"prefix": "General::noserver", "message": true, "tag": "noserver", "symbol": "General", "text": "<math><mrow><mtext>No server running.</mtext></mrow></math>"}]}]}';
-			}
-			var response = transport.responseText.evalJSON();
-			setResult(textarea.ul, response.results);
-			textarea.submitted = true;
-			textarea.results = response.results;
-			var next = textarea.li.nextSibling;
-			if (next)
-				next.textarea.focus();
-			else
-				createQuery();
+		    var response;
+            if (!transport.responseText) {
+                response = null;
+            } else {
+                response = transport.responseText.evalJSON();
+            }
+            notebook.display(textarea, response);
 		},
 		onFailure: function(transport) {
 			textarea.ul.select('li[class!=request]').invoke('deleteElement');
@@ -419,7 +514,7 @@ function submitQuery(textarea, onfinish) {
 			if (onfinish)
 				onfinish();
 		}
-	});
+	});*/
 }
 
 function getSelection() {
@@ -726,3 +821,31 @@ $(document).observe('dom:loaded', domLoaded);
 // Konqueror won't fire dom:loaded, so we still need body.onload.
 
 window.onresize = refreshInputSizes;
+
+
+function initMathJax() {
+	MathJax.Hub.Config({
+		jax: ["input/MathML","output/SVG"],
+		extensions: ["mml2jax.js", "MathEvents.js"],
+		MathML: {
+			extensions: ["content-mathml.js"]
+		},
+		SVG: {
+			mtextFontInherit: true,
+			blacker: 1,
+			linebreaks: { automatic: true }
+		},
+		menuSettings: {
+			zoom: "Click"
+		},
+		MatchWebFonts: {
+			matchFor: {
+			SVG: true
+			},
+			fontCheckDelay: 500,
+			fontCheckTimeout: 15 * 1000
+		},
+		messageStyle: "none",
+		skipStartupTypeset: true
+	});
+}

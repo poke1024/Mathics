@@ -122,10 +122,22 @@ AUTHENTICATION_BACKENDS = (
     'mathics.web.authentication.EmailModelBackend',
 )
 
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "asgiref.inmemory.ChannelLayer",
+        "ROUTING": "mathics.web.routing.channel_routing",
+    },
+}
+
+STATIC_ROOT = ''
+
+STATIC_URL = '/static/'
+
 INSTALLED_APPS = (
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.sites',
     'mathics.web',
+    'channels',  # see http://channels.readthedocs.io/en/latest/installation.html
 )

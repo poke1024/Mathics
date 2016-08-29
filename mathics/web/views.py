@@ -46,7 +46,8 @@ class JsonResponse(HttpResponse):
 
 
 class WebOutput(Output):
-    pass
+    def __init__(self, webengine):
+        pass
 
 
 def require_ajax_login(func):
@@ -87,27 +88,23 @@ def error_500_view(request):
     })))
 
 
-def query(request):
+def query(input, webengine=None):
     from mathics.core.parser import MultiLineFeeder
 
-    input = request.POST.get('query', '')
-    if settings.DEBUG and not input:
-        input = request.GET.get('query', '')
+    #if settings.LOG_QUERIES:
+    #    query_log = Query(query=input, error=True,
+    #                      browser=request.META.get('HTTP_USER_AGENT', ''),
+    #                      remote_user=request.META.get('REMOTE_USER', ''),
+    #                      remote_addr=request.META.get('REMOTE_ADDR', ''),
+    #                      remote_host=request.META.get('REMOTE_HOST', ''),
+    #                      meta=six.text_type(request.META),
+    #                      log='',
+    #                      )
+    #    query_log.save()
 
-    if settings.LOG_QUERIES:
-        query_log = Query(query=input, error=True,
-                          browser=request.META.get('HTTP_USER_AGENT', ''),
-                          remote_user=request.META.get('REMOTE_USER', ''),
-                          remote_addr=request.META.get('REMOTE_ADDR', ''),
-                          remote_host=request.META.get('REMOTE_HOST', ''),
-                          meta=six.text_type(request.META),
-                          log='',
-                          )
-        query_log.save()
-
-    user_definitions = request.session.get('definitions')
-    definitions.set_user_definitions(user_definitions)
-    evaluation = Evaluation(definitions, format='xml', output=WebOutput())
+    #user_definitions = request.session.get('definitions')
+    #definitions.set_user_definitions(user_definitions)
+    evaluation = Evaluation(definitions, format='xml', output=WebOutput(webengine))
     feeder = MultiLineFeeder(input, '<notebook>')
     results = []
     try:
@@ -131,15 +128,15 @@ def query(request):
     result = {
         'results': [result.get_data() for result in results],
     }
-    request.session['definitions'] = definitions.get_user_definitions()
+    #request.session['definitions'] = definitions.get_user_definitions()
 
-    if settings.LOG_QUERIES:
-        query_log.timeout = evaluation.timeout
-        query_log.result = six.text_type(result)  # evaluation.results
-        query_log.error = False
-        query_log.save()
+    #if settings.LOG_QUERIES:
+    #    query_log.timeout = evaluation.timeout
+    #    query_log.result = six.text_type(result)  # evaluation.results
+    #    query_log.error = False
+    #    query_log.save()
 
-    return JsonResponse(result)
+    return result
 
 # taken from http://code.activestate.com/recipes/410076/
 

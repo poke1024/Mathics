@@ -1756,6 +1756,9 @@ class MathMLForm(Builtin):
         # mathml = '<math><mstyle displaystyle="true">%s</mstyle></math>' % xml
         # #convert_box(boxes)
         mathml = '<math>%s</math>' % xml  # convert_box(boxes)
+
+        print(evaluation.output.mathml_to_svg(mathml))  # FIXME
+
         return Expression('RowBox', Expression('List', String(mathml)))
 
 

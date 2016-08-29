@@ -157,6 +157,12 @@ class Output(object):
     def display(self, data, metadata):
         raise NotImplementedError
 
+    def mathml_to_svg(self, mathml):
+        return None
+
+    def rasterize(self, svg):
+        return None
+
 
 class Evaluation(object):
     def __init__(self, definitions=None,
