@@ -144,6 +144,26 @@ function translateDOMElement(element, svg) {
 		var text = element.nodeValue;
 		return $T(text);
 	}
+
+	if (svg && element.nodeName == 'svg') {
+	    // leave <svg>s embedded in <svg>s alone, if they are
+	    // not <svg> > <foreignObject> > <svg>. this fixes the
+	    // node.js web engine svg rendering, which embeds text
+	    // as <svg> in the Graphics <svg>.
+    	var node = element;
+    	var ok = false;
+	    while (node != svg && node.parentNode) {
+	        if (node.nodeName == 'foreignObject') {
+	            ok = true;
+	            break;
+	        }
+	        node = node.parentNode;
+	    }
+	    if (!ok) {
+	        return element;
+	    }
+	}
+
 	var dom = null;
 	var nodeName = element.nodeName;
 	if (nodeName != 'meshgradient' && nodeName != 'graphics3d') {
@@ -261,10 +281,11 @@ function translateDOMElement(element, svg) {
 			dom = mtable;
 		} else
 			childParent.appendChild(mtable);
-	} else
+	} else {
 		rows[0].each(function(element) {
 			childParent.appendChild(translateDOMElement(element, svg));
 		});
+    }
 	if (object) {
 		var id = objectsCount++;
 		object.setAttribute('id', objectsPrefix + id);
@@ -285,17 +306,19 @@ function convertMathGlyphs(dom) {
         var src = glyph.getAttribute('src');
         if (src.startsWith('data:image/svg+xml;base64,')) {
             var svgText = atob(src.substring(src.indexOf(",") + 1));
-            var mtable =document.createElementNS(MML, "mtable");
+            var mtable = document.createElementNS(MML, "mtable");
             mtable.innerHTML = '<mtr><mtd>' + svgText + '</mtd></mtr>';
             var svg = mtable.getElementsByTagNameNS("*", "svg")[0];
             svg.setAttribute('width', glyph.getAttribute('width'));
             svg.setAttribute('height', glyph.getAttribute('height'));
+            svg.setAttribute('data-mathics', 'format');
             glyph.parentNode.replaceChild(mtable, glyph);
         } else if (src.startsWith('data:image/')) {
             var img = document.createElement('img');
             img.setAttribute('src', src)
             img.setAttribute('width', glyph.getAttribute('width'));
             img.setAttribute('height', glyph.getAttribute('height'));
+            img.setAttribute('data-mathics', 'format');
             glyph.parentNode.replaceChild(img, glyph);
         }
     }

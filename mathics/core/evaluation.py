@@ -15,6 +15,7 @@ import itertools
 
 from mathics import settings
 from mathics.core.expression import ensure_context, KeyComparable
+from mathics.layout.client import NoWebEngine
 
 FORMATS = ['StandardForm', 'FullForm', 'TraditionalForm',
            'OutputForm', 'InputForm',
@@ -158,14 +159,8 @@ class Result(object):
 
 
 class Output(object):
-    def __init__(self, layout_engine=None):
-        self.layout_engine = layout_engine
-
-    def svgify(self):
-        # True if the MathML output should be instantly rendered into SVG
-        # in the backend, i.e. the browser will only see SVG. False for the
-        # classic mode, i.e. Mathics gives <math> tags to the browser.
-        return False
+    def __init__(self, web_engine=NoWebEngine()):
+        self.web_engine = web_engine
 
     def max_stored_size(self, settings):
         return settings.MAX_STORED_SIZE
@@ -179,21 +174,17 @@ class Output(object):
     def display(self, data, metadata):
         raise NotImplementedError
 
-    def mathml_to_svg(self, mathml):
-        svg = None
-        if self.layout_engine:
-            svg = self.layout_engine.mathml_to_svg(mathml)
-        if svg is None:
-            raise RuntimeError("LayoutEngine is unavailable")
-        return svg
+    def warn_about_web_engine(self):
+        return False
 
-    def rasterize(self, svg):
-        png = None
-        if self.layout_engine:
-            png = self.layout_engine.rasterize(svg)
-        if png is None:
-            raise RuntimeError("LayoutEngine is unavailable")
-        return png
+    def assume_web_engine(self):
+        return self.web_engine.assume_is_available()
+
+    def mathml_to_svg(self, mathml):
+        return self.web_engine.mathml_to_svg(mathml)
+
+    def rasterize(self, svg, *args, **kwargs):
+        return self.web_engine.rasterize(svg, *args, **kwargs)
 
 
 class Evaluation(object):
@@ -217,6 +208,7 @@ class Evaluation(object):
         self.format = format
         self.output_size_limit = None
         self.catch_interrupt = catch_interrupt
+        self.once_messages = set()
 
     def parse(self, query):
         'Parse a single expression and print the messages.'
@@ -470,7 +462,7 @@ class Evaluation(object):
 
         return list(itertools.chain(left_leaves, ellipsis, reversed(right_leaves)))
 
-    def message(self, symbol, tag, *args):
+    def message(self, symbol, tag, *args, once=False):
         from mathics.core.expression import (String, Symbol, Expression,
                                              from_python)
 
@@ -480,6 +472,11 @@ class Evaluation(object):
         quiet_messages = set(self.get_quiet_messages())
 
         pattern = Expression('MessageName', Symbol(symbol), String(tag))
+
+        if once:
+            if pattern in self.once_messages:
+                return
+            self.once_messages.add(pattern)
 
         if pattern in quiet_messages or self.quiet_all:
             return

@@ -1,20 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# In order to use LayoutEngine, you need the "zerorpc" in your Python installation, and nodejs in your path.
 # you may use "NODE" in settings.py to specify a custom node binary, and you may use NODE_PATH in settings.py
-# to specify a custom node_modules path (that has the necessary node modules mathjax-node, zerorpc, ...).
+# to specify a custom node_modules path (that has the necessary node modules mathjax-node, ...).
 #
-# The zerorpc package from https://github.com/0rpc/zerorpc-python. needs to be installed manually using
-# "/your/python setup.py install". For Python 3, you need to use the zerorpc 3.4 branch.
-
-# Your installation of nodejs with the following packages: mathjax-node zerorpc svg2png (install them using
+# Your installation of nodejs with the following packages: mathjax-node svg2png (install them using
 # npm).
 
-# Some tips for installing nodejs and zmq on OS X:
+# Tips for installing nodejs on OS X:
 # see https://gist.github.com/DanHerbert/9520689
-# https://github.com/JustinTulloss/zeromq.node/issues/283
-# brew install zmq && npm install zmq
 # export NODE_PATH=/your/path/to/homebrew/bin/node_modules:$NODE_PATH
 
 import subprocess
@@ -23,73 +17,163 @@ import os
 
 from mathics import settings
 
-try:
-    import zerorpc
-    supported = True
-except ImportError:
-    supported = False
+import socket
+import json
+import struct
 
 
-def warn(s):
-    print(s)
+class Pipe:
+    def __init__(self, sock):
+        self.sock = sock
+
+    # the following three functions are taken from
+    # http://stackoverflow.com/questions/17667903/python-socket-receive-large-amount-of-data
+
+    def _recvall(self, n):
+        # Helper function to recv n bytes or return None if EOF is hit
+        data = b''
+        sock = self.sock
+        while len(data) < n:
+            packet = sock.recv(n - len(data))
+            if not packet:
+                return None
+            data += packet
+        return data
+
+    def put(self, msg):
+        msg = json.dumps(msg).encode('utf8')
+        # Prefix each message with a 4-byte length (network byte order)
+        msg = struct.pack('>I', len(msg)) + msg
+        self.sock.sendall(msg)
+
+    def get(self):
+        # Read message length and unpack it into an integer
+        raw_msglen = self._recvall(4)
+        if not raw_msglen:
+            return None
+        msglen = struct.unpack('>I', raw_msglen)[0]
+        # Read the message data
+        return json.loads(self._recvall(msglen).decode('utf8'))
 
 
-class LayoutEngine(object):
-    def __init__(self):
-        if not supported:
-            self.process = None
-            warn('Web layout engine is disabled as zerorpc is not installed.')
-        else:
-            try:
-                popen_env = os.environ.copy()
-                if settings.NODE_PATH:
-                    popen_env["NODE_PATH"] = settings.NODE_PATH
+class RemoteMethod:
+    def __init__(self, socket, name):
+        self.pipe = Pipe(socket)
+        self.name = name
 
-                base = os.path.dirname(os.path.realpath(__file__))
+    def __call__(self, *args):
+        self.pipe.put({'call': self.name, 'args': args})
+        return self.pipe.get()
 
-                self.process = Popen(
-                    [settings.NODE, base + "/server.js"],
-                    stdout=subprocess.PIPE,
-                    env=popen_env)
 
-                status = self.process.stdout.readline().decode('utf8').strip()
-                if status != 'OK':
-                    error = ''
-                    while True:
-                        line = self.process.stdout.readline().decode('utf8')
-                        if not line:
-                            break
-                        error += '  ' + line
-                    warn('Node.js failed to start web layout engine:')
-                    warn(error)
-                    warn('Check necessary node.js modules and that NODE_PATH is set correctly.')
-                    self.process.terminate()
-                    self.process = None
-            except OSError as e:
-                warn('Failed to start web layout engine:')
-                warn(str(e))
-                self.process = None
+class Client:
+    def __init__(self, ip, port):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.connect((ip, port))
 
-        if self.process is None:
-            self.client = None
-        else:
-            try:
-                self.client = zerorpc.Client()
-                self.client.connect("tcp://127.0.0.1:4241")
-            except Exception as e:
-                self.client = None
-                warn('node.js failed to start web layout engine:')
-                warn(str(e))
-                warn('Probably you are missing node.js modules.')
+    def __getattr__(self, name):
+        return RemoteMethod(self.socket, name)
+
+    def close(self):
+        return self.socket.close()
+
+
+# Why WebEngine? Well, QT calls its class for similar stuff "web engine", an engine
+# that "provides functionality for rendering regions of dynamic web content". This
+# is not about web servers but layout (http://doc.qt.io/qt-5/qtwebengine-index.html).
+
+
+class WebEngineUnavailable(RuntimeError):
+    pass
+
+
+class NoWebEngine:
+    def assume_is_available(self):
+        raise WebEngineUnavailable
 
     def mathml_to_svg(self, mathml):
-        if self.client:
-            return self.client.mathml_to_svg(mathml)
+        raise WebEngineUnavailable
 
-    def rasterize(self, svg):
-        if self.client:
-            return self.client.rasterize(svg)
+    def rasterize(self, svg, *args, **kwargs):
+        raise WebEngineUnavailable
+
+
+class WebEngine:
+    def __init__(self):
+        self.process = None
+        self.client = None
+        self.unavailable = None
+
+    def _create_client(self):
+        try:
+            popen_env = os.environ.copy()
+            if settings.NODE_MODULES:
+                popen_env["NODE_PATH"] = os.path.expandvars(settings.NODE_MODULES)
+
+            server_path = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), 'server.js')
+
+            def abort(message):
+                error_text = 'Node.js failed to startup %s:\n\n' % server_path
+                raise WebEngineUnavailable(error_text + message)
+
+            process = Popen(
+                [os.path.expandvars(settings.NODE), server_path],
+                stdout=subprocess.PIPE,
+                env=popen_env)
+
+            hello = 'HELLO:'  # agreed upon "all ok" hello message.
+
+            status = process.stdout.readline().decode('utf8').strip()
+            if not status.startswith(hello):
+                error = ''
+                while True:
+                    line = process.stdout.readline().decode('utf8')
+                    if not line:
+                        break
+                    error += '  ' + line
+
+                process.terminate()
+                abort(error + '\nPlease check Node.js modules and NODE_PATH')
+
+            port = int(status[len(hello):])
+        except OSError as e:
+            abort(str(e))
+
+        try:
+            self.client = Client('127.0.0.1', port)
+            self.process = process
+        except Exception as e:
+            self.client = None
+            self.process = None
+            process.terminate()
+            abort(str(e))
+
+    def _ensure_client(self):
+        if not self.client:
+            if self.unavailable is not None:
+                raise WebEngineUnavailable(self.unavailable)
+            try:
+                self._create_client()
+            except WebEngineUnavailable as e:
+                self.unavailable = str(e)
+                raise e
+
+        return self.client
+
+    def assume_is_available(self):
+        if self.unavailable is not None:
+            raise WebEngineUnavailable(self.unavailable)
+
+    def mathml_to_svg(self, mathml):
+        return self._ensure_client().mathml_to_svg(mathml)
+
+    def rasterize(self, svg, size):
+        return self._ensure_client().rasterize(svg, size)
 
     def terminate(self):
         if self.process:
             self.process.terminate()
+            self.process = None
+            self.client = None
+

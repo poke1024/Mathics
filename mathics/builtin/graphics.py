@@ -22,6 +22,7 @@ from sympy.matrices import Matrix
 from mathics.builtin.base import (
     Builtin, InstancableBuiltin, BoxConstruct, BoxConstructError)
 from mathics.builtin.options import options_to_rules
+from mathics.layout.client import WebEngineUnavailable
 from mathics.core.expression import (
     Expression, Integer, Rational, Real, String, Symbol, strip_context,
     system_symbols, system_symbols_dict, from_python)
@@ -2463,13 +2464,17 @@ class InsetBox(_GraphicsElement):
             self.pos = pos
             self.opos = opos
 
-        if self.graphics.evaluation.output.svgify():
+        try:
             self._prepare_text_svg()
-        else:
+        except WebEngineUnavailable as e:
             self.svg = None
 
             self.content_text = self.content.boxes_to_text(
                 evaluation=self.graphics.evaluation)
+
+            if self.graphics.evaluation.output.warn_about_web_engine():
+                self.graphics.evaluation.message(
+                    'General', 'nowebeng', str(e), once=True)
 
     def extent(self):
         p = self.pos.pos()
@@ -2480,7 +2485,7 @@ class InsetBox(_GraphicsElement):
                 7  # rough approximation by numbers of characters
         else:
             _, w, h = self.svg
-            scale = self._text_svg_scale()
+            scale = self._text_svg_scale(h)
             w *= scale
             h *= scale
 
@@ -2490,11 +2495,15 @@ class InsetBox(_GraphicsElement):
         return [(x, y), (x + w, y + h)]
 
     def _prepare_text_svg(self):
+        self.graphics.evaluation.output.assume_web_engine()
+
         content = self.content.boxes_to_xml(
             evaluation=self.graphics.evaluation)
 
         svg = self.graphics.evaluation.output.mathml_to_svg(
             '<math>%s</math>' % content)
+
+        svg = svg.replace('style', 'data-style', 1)  # HACK
 
         # we could parse the svg and edit it. using regexps here should be
         # a lot faster though.
@@ -2515,16 +2524,15 @@ class InsetBox(_GraphicsElement):
 
         self.svg = (svg, width, height)
 
-    def _text_svg_scale(self):
+    def _text_svg_scale(self, height):
         size = self.font_size.get_size()
-        # multiplying with 0.5 makes FontSize[] and FontSize[Scaled[]] work as expected
-        return size * 0.5
+        return size / height
 
     def _text_svg_xml(self, style, x, y):
         svg, width, height = self.svg
         svg = re.sub(r'<svg ', '<svg style="%s" ' % style, svg, 1)
 
-        scale = self._text_svg_scale()
+        scale = self._text_svg_scale(height)
         ox, oy = self.opos
 
         return '<g transform="translate(%f,%f) scale(%f) translate(%f, %f)">%s</g>' % (
@@ -2718,6 +2726,7 @@ class _GraphicsElements(object):
         self.evaluation = evaluation
         self.elements = []
         self.view_width = None
+        self.web_engine_warning_issued = False
 
         builtins = evaluation.definitions.builtin
         def get_options(name):
@@ -3160,23 +3169,13 @@ clip(%s);
         w += 2
         h += 2
 
-        svgify = options['evaluation'].output.svgify()
-
-        if not svgify:
-            params = ''
-        else:
-            params = 'width="%dpx" height="%dpx"' % (width, height)
-
         svg_xml = '<svg xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg" ' \
-            'version="1.1" viewBox="%s" %s>%s</svg>' % (' '.join('%f' % t for t in (xmin, ymin, w, h)), params, svg)
+            'version="1.1" viewBox="%s">%s</svg>' % (' '.join('%f' % t for t in (xmin, ymin, w, h)), svg)
 
-        if not svgify:
-            return '<mglyph width="%dpx" height="%dpx" src="data:image/svg+xml;base64,%s"/>' % (
-                int(width),
-                int(height),
-                base64.b64encode(svg_xml.encode('utf8')).decode('utf8'))
-        else:
-            return svg_xml
+        return '<mglyph width="%dpx" height="%dpx" src="data:image/svg+xml;base64,%s"/>' % (
+            int(width),
+            int(height),
+            base64.b64encode(svg_xml.encode('utf8')).decode('utf8'))
 
     def axis_ticks(self, xmin, xmax):
         def round_to_zero(value):
