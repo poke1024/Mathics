@@ -1030,15 +1030,15 @@ class FontSize(_GraphicsElement):
 
     def get_size(self):
         if self.scaled:
-            if self.graphics.view_width is None:
+            if self.graphics.extent_width is None:
                 return 1.
             else:
-                return self.graphics.view_width * self.value
+                return self.graphics.extent_width * self.value
         else:
-            if self.graphics.view_width is None or self.graphics.pixel_width is None:
+            if self.graphics.extent_width is None or self.graphics.pixel_width is None:
                 return 1.
             else:
-                return (96. / 72.) * (self.value * self.graphics.pixel_width) / self.graphics.view_width
+                return (96. / 72.) * (self.value * self.graphics.extent_width / self.graphics.pixel_width)
 
 
 class Scaled(Builtin):
@@ -2528,17 +2528,23 @@ class InsetBox(_GraphicsElement):
         size = self.font_size.get_size()
         return size / height
 
-    def _text_svg_xml(self, style, x, y):
+    def _text_svg_xml(self, style, x, y, absolute):
         svg, width, height = self.svg
         svg = re.sub(r'<svg ', '<svg style="%s" ' % style, svg, 1)
 
         scale = self._text_svg_scale(height)
         ox, oy = self.opos
 
-        return '<g transform="translate(%f,%f) scale(%f) translate(%f, %f)">%s</g>' % (
+        if absolute:
+            tx, ty = (1., 1.)
+        else:
+            tx, ty = self.graphics.text_rescale
+
+        return '<g transform="translate(%f,%f) scale(%f,%f) translate(%f, %f)">%s</g>' % (
             x,
             y,
-            scale,
+            scale * tx,
+            scale * ty,
             -width / 2 - ox * width / 2,
             -height / 2 + oy * height / 2,
             svg)
@@ -2552,19 +2558,19 @@ class InsetBox(_GraphicsElement):
             evaluation=evaluation)
         style = create_css(font_color=self.color)
 
-        if not absolute:
-            x, y = list(self.graphics.local_to_screen.transform([(x, y)]))[0]
-
         if not self.svg:
+            if not absolute:
+                x, y = list(self.graphics.local_to_screen.transform([(x, y)]))[0]
+
             svg = (
                 '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
                 '<math>%s</math></foreignObject>') % (
                     x, y, self.opos[0], self.opos[1], style, content)
-        else:
-            svg = self._text_svg_xml(style, x, y)
 
-        if not absolute:
-            svg = self.graphics.inverse_local_to_screen.to_svg(svg)
+            if not absolute:
+                svg = self.graphics.inverse_local_to_screen.to_svg(svg)
+        else:
+            svg = self._text_svg_xml(style, x, y, absolute)
 
         return svg
 
@@ -2724,8 +2730,6 @@ def _flatten(leaves):
 class _GraphicsElements(object):
     def __init__(self, content, evaluation):
         self.evaluation = evaluation
-        self.elements = []
-        self.view_width = None
         self.web_engine_warning_issued = False
 
         builtins = evaluation.definitions.builtin
@@ -2855,6 +2859,7 @@ class GraphicsElements(_GraphicsElements):
         self.elements[0].patch_transforms([transform])
         self.local_to_screen = transform
         self.inverse_local_to_screen = transform.inverse()
+        self.text_rescale = (1., -1. if self.neg_y else 1.)
 
     def add_axis_element(self, e):
         # axis elements are added after the GeometricTransformationBox and are thus not
@@ -3275,7 +3280,7 @@ clip(%s);
         tick_large_size = 5
         tick_label_d = 2
 
-        font_size = tick_large_size * 2.
+        font_size = tick_large_size * 7.5
 
         ticks_x_int = all(floor(x) == x for x in ticks_x)
         ticks_y_int = all(floor(x) == x for x in ticks_y)

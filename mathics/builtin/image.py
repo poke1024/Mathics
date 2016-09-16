@@ -10,7 +10,7 @@ from mathics.builtin.base import (
     Builtin, AtomBuiltin, Test, BoxConstruct, String)
 from mathics.core.expression import (
     Atom, Expression, Integer, Rational, Real, MachineReal, Symbol, from_python)
-from mathics.builtin.colors import convert as convert_color, , colorspaces as known_colorspaces
+from mathics.builtin.colors import convert as convert_color, colorspaces as known_colorspaces
 from mathics.layout.client import WebEngineUnavailable
 
 import six
