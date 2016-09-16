@@ -144,7 +144,11 @@ class _Exif:
     @staticmethod
     def extract(im, evaluation):
         if hasattr(im, '_getexif'):
-            for k, v in sorted(im._getexif().items(), key=lambda x: x[0]):
+            exif = im._getexif()
+            if not exif:
+                return
+
+            for k, v in sorted(exif.items(), key=lambda x: x[0]):
                 name = ExifTags.get(k)
                 if not name:
                     continue
@@ -1915,7 +1919,7 @@ class Image(Atom):
         return self.color_convert('Grayscale')
 
     def atom_to_boxes(self, f, evaluation):
-        pixels = pixels_as_ubyte(self.color_convert('RGB', False).pixels)
+        pixels = pixels_as_ubyte(self.color_convert('RGB', True).pixels)
         shape = pixels.shape
 
         width = shape[1]
@@ -1923,7 +1927,12 @@ class Image(Atom):
         scaled_width = width
         scaled_height = height
 
-        pillow = PIL.Image.fromarray(pixels, 'RGB')
+        if len(shape) >= 3 and shape[2] == 4:
+            pixels_format = 'RGBA'
+        else:
+            pixels_format = 'RGB'
+
+        pillow = PIL.Image.fromarray(pixels, pixels_format)
 
         # if the image is very small, scale it up using nearest neighbour.
         min_size = 128
