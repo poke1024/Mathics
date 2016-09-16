@@ -2713,6 +2713,19 @@ class Style(object):
             return 0
         return edge_style.get_thickness()
 
+    def to_axis_style(self):
+        return AxisStyle(self)
+
+
+class AxisStyle(Style):
+    def __init__(self, style):
+        super(AxisStyle, self).__init__(style.graphics, style.edge, style.face)
+        self.styles = style.styles
+        self.options = style.options
+
+    def get_line_width(self, face_element=True):
+        return 0.5
+
 
 def _flatten(leaves):
     for leaf in leaves:
@@ -3265,6 +3278,11 @@ clip(%s);
         ticks_style = [elements.create_style(s) for s in ticks_style]
         axes_style = [elements.create_style(s) for s in axes_style]
         label_style = elements.create_style(label_style)
+
+        ticks_style = [s.to_axis_style() for s in ticks_style]
+        axes_style = [s.to_axis_style() for s in axes_style]
+        label_style = label_style.to_axis_style()
+
         ticks_style[0].extend(axes_style[0])
         ticks_style[1].extend(axes_style[1])
 
@@ -3280,7 +3298,8 @@ clip(%s);
         tick_large_size = 5
         tick_label_d = 2
 
-        font_size = tick_large_size * 7.5
+        # hack: work around the local to screen scaling in class FontSize
+        font_size = tick_large_size * 2. / (elements.extent_width / elements.pixel_width)
 
         ticks_x_int = all(floor(x) == x for x in ticks_x)
         ticks_y_int = all(floor(x) == x for x in ticks_y)
