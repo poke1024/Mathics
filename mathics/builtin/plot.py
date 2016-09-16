@@ -15,6 +15,7 @@ from six.moves import zip
 from math import sin, cos, pi, sqrt, isnan, isinf
 import numbers
 import itertools
+import palettable
 
 from mathics.core.expression import (Expression, Real, MachineReal, Symbol,
                                      String, Integer, from_python)
@@ -61,6 +62,34 @@ class ColorDataFunction(Builtin):
     pass
 
 
+class _GradientColorScheme(object):
+    def color_data_function(self, name):
+        colors = Expression('List', *[Expression('RGBColor', *color) for color in self.colors()])
+        blend = Expression('Function', Expression('Blend', colors, Expression('Slot', 1)))
+        arguments = [String(name), String('Gradients'), Expression('List', 0, 1), blend]
+        return Expression('ColorDataFunction', *arguments)
+
+
+class _PredefinedGradient(_GradientColorScheme):
+    def __init__(self, colors):
+        self._colors = colors
+
+    def colors(self):
+        return self._colors
+
+
+class _PalettableGradient(_GradientColorScheme):
+    def __init__(self, palette, reversed):
+        self.palette = palette
+        self.reversed = reversed
+
+    def colors(self):
+        colors = self.palette.mpl_colors
+        if self.reversed:
+            colors = list(reversed(colors))
+        return colors
+
+
 class ColorData(Builtin):
     """
     <dl>
@@ -75,14 +104,60 @@ class ColorData(Builtin):
     >> {DensityPlot[x + y, {x, -1, 1}, {y, -1, 1}], DensityPlot[x + y, {x, -1, 1}, {y, -1, 1}, ColorFunction->"test"]}
      = {-Graphics-, -Graphics-}
     """
-    rules = {
-        'ColorData["LakeColors"]': (
-            """ColorDataFunction["LakeColors", "Gradients", {0, 1},
-                Blend[{RGBColor[0.293416, 0.0574044, 0.529412],
-                    RGBColor[0.563821, 0.527565, 0.909499],
-                    RGBColor[0.762631, 0.846998, 0.914031],
-                    RGBColor[0.941176, 0.906538, 0.834043]}, #1] &]"""),
+
+    messages = {
+        'notent': '`1` is not a known color scheme. ColorData[] gives you lists of schemes.',
     }
+
+    palettes = {
+        'LakeColors': _PredefinedGradient([
+            (0.293416, 0.0574044, 0.529412),
+            (0.563821, 0.527565, 0.909499),
+            (0.762631, 0.846998, 0.914031),
+            (0.941176, 0.906538, 0.834043)]),
+
+        'Pastel': _PalettableGradient(palettable.colorbrewer.qualitative.Pastel1_9, False),
+        'Rainbow': _PalettableGradient(palettable.colorbrewer.diverging.Spectral_9, True),
+        'RedBlueTones': _PalettableGradient(palettable.colorbrewer.diverging.RdBu_11, False),
+        'GreenPinkTones': _PalettableGradient(palettable.colorbrewer.diverging.PiYG_9, False),
+        'GrayTones': _PalettableGradient(palettable.colorbrewer.sequential.Greys_9, False),
+        'SolarColors': _PalettableGradient(palettable.colorbrewer.sequential.OrRd_9, True),
+        'CherryTones': _PalettableGradient(palettable.colorbrewer.sequential.Reds_9, True),
+        'FuchsiaTones':_PalettableGradient(palettable.colorbrewer.sequential.RdPu_9, True),
+        'SiennaTones': _PalettableGradient(palettable.colorbrewer.sequential.Oranges_9, True),
+
+        # specific to Mathics
+        'Paired': _PalettableGradient(palettable.colorbrewer.qualitative.Paired_9, False),
+        'Accent': _PalettableGradient(palettable.colorbrewer.qualitative.Accent_8, False),
+        'Aquatic': _PalettableGradient(palettable.wesanderson.Aquatic1_5, False),
+        'Zissou': _PalettableGradient(palettable.wesanderson.Zissou_5, False),
+        'Tableau': _PalettableGradient(palettable.tableau.Tableau_20, False),
+        'TrafficLight': _PalettableGradient(palettable.tableau.TrafficLight_9, False),
+        'Moonrise1': _PalettableGradient(palettable.wesanderson.Moonrise1_5, False),
+    }
+
+    def apply_directory(self, evaluation):
+        'ColorData[]'
+        return Expression('List', String("Gradients"))
+
+    def apply(self, name, evaluation):
+        'ColorData[name_String]'
+        py_name = name.get_string_value()
+        if py_name == 'Gradients':
+            return Expression('List', *[String(name) for name in self.palettes.keys()])
+        palette = ColorData.palettes.get(py_name, None)
+        if palette is None:
+            evaluation.message('ColorData', 'notent', name)
+            return
+        return palette.color_data_function(py_name)
+
+    @staticmethod
+    def colors(name, evaluation):
+        palette = ColorData.palettes.get(name, None)
+        if palette is None:
+            evaluation.message('ColorData', 'notent', name)
+            return None
+        return palette.colors()
 
 
 class Mesh(Builtin):
@@ -576,80 +651,23 @@ class _Plot(Builtin):
                           *options_to_rules(options))
 
 
-class ColorData(Builtin):
-    messages = {
-        'notent': '`1` is not a known color scheme. ColorData[] gives you lists of schemes.',
-    }
-
-    palettes = {
-        'Pastel': (lambda palettable: palettable.colorbrewer.qualitative.Pastel1_9, False),
-        'Rainbow': (lambda palettable: palettable.colorbrewer.diverging.Spectral_9, True),
-        'RedBlueTones': (lambda palettable: palettable.colorbrewer.diverging.RdBu_11, False),
-        'GreenPinkTones': (lambda palettable: palettable.colorbrewer.diverging.PiYG_9, False),
-        'GrayTones': (lambda palettable: palettable.colorbrewer.sequential.Greys_9, False),
-        'SolarColors': (lambda palettable: palettable.colorbrewer.sequential.OrRd_9, True),
-        'CherryTones': (lambda palettable: palettable.colorbrewer.sequential.Reds_9, True),
-        'FuchsiaTones': (lambda palettable: palettable.colorbrewer.sequential.RdPu_9, True),
-        'SiennaTones': (lambda palettable: palettable.colorbrewer.sequential.Oranges_9, True),
-
-        # specific to Mathics
-        'Paired': (lambda palettable: palettable.colorbrewer.qualitative.Paired_9, False),
-        'Accent': (lambda palettable: palettable.colorbrewer.qualitative.Accent_8, False),
-        'Aquatic': (lambda palettable: palettable.wesanderson.Aquatic1_5, False),
-        'Zissou': (lambda palettable: palettable.wesanderson.Zissou_5, False),
-        'Tableau': (lambda palettable: palettable.tableau.Tableau_20, False),
-        'TrafficLight': (lambda palettable: palettable.tableau.TrafficLight_9, False),
-    }
-
-    def apply(self, evaluation):
-        'ColorData[]'
-        return Expression('List', String("Gradients"))
-
-    def apply_gradients(self, evaluation):
-        'ColorData["Gradients"]'
-        return Expression('List', *[String(name) for name in self.palettes.keys()])
-
-
-class BarChart(Builtin):
-    """
-    <dl>
-    <dt>'BarChart[{$p1$, $p2$ ...}]'
-        <dd>draws a bar chart.
-    </dl>
-
-    >> BarChart[{1, 4, 2}]
-     = -Graphics-
-
-    >> BarChart[{1, 4, 2}, ChartStyle -> {Red, Green, Blue}]
-     = -Graphics-
-
-    >> BarChart[{{1, 2, 3}, {2, 3, 4}}]
-     = -Graphics-
-
-    >> BarChart[{{1, 2, 3}, {2, 3, 4}}, ChartLabels -> {"a", "b", "c"}]
-     = -Graphics-
-
-    >> BarChart[{{1, 5}, {3, 4}}, ChartStyle -> {{EdgeForm[Thin], White}, {EdgeForm[Thick], White}}]
-     = -Graphics-
-    """
+class _Chart(Builtin):
+    attributes = ('HoldAll',)
 
     from .graphics import Graphics
 
-    attributes = ('HoldAll',)
-
     options = Graphics.options.copy()
     options.update({
-        'Axes': '{False, True}',
-        'AspectRatio': '1 / GoldenRatio',
         'Mesh': 'None',
         'PlotRange': 'Automatic',
         'ChartLabels': 'None',
         'ChartStyle': 'Automatic',
     })
 
-    requires = (
-        'palettable',
-    )
+    never_monochrome = False
+
+    def _draw(self, data, color, evaluation, options):
+        raise NotImplementedError()
 
     def apply(self, points, evaluation, options):
         '%(name)s[points_, OptionsPattern[%(name)s]]'
@@ -687,26 +705,14 @@ class BarChart(Builtin):
             spread_colors = False
         elif isinstance(chart_style, String):
             if chart_style.get_string_value() == 'Automatic':
-                get_palette = lambda palettable: palettable.wesanderson.Moonrise1_5
-                rotate_palette = 0
-                reverse_palette = True
+                mpl_colors = palettable.wesanderson.Moonrise1_5.mpl_colors
             else:
-                get_palette, reverse_palette = ColorData.palettes.get(
-                    chart_style.get_string_value(), (None, None))
-                if get_palette is None:
-                    evaluation.message('ColorData', 'notent', chart_style)
+                mpl_colors = ColorData.colors(chart_style.get_string_value())
+                if mpl_colors is None:
                     return
-                rotate_palette = 0
                 multiple_colors = True
 
-            import palettable
-            palette = get_palette(palettable)
-            mpl_colors = palette.mpl_colors
-            if reverse_palette:
-                mpl_colors = list(reversed(mpl_colors))
-            if rotate_palette:
-                mpl_colors = mpl_colors[rotate_palette:] + mpl_colors[:rotate_palette]
-            if not multiple_colors:
+            if not multiple_colors and not self.never_monochrome:
                 colors = [Expression('RGBColor', *mpl_colors[0])]
             else:
                 colors = [Expression('RGBColor', *c) for c in mpl_colors]
@@ -714,47 +720,231 @@ class BarChart(Builtin):
         else:
             return
 
+        def color(k, n):
+            if spread_colors and n < len(colors):
+                index = int(k * (len(colors) - 1)) // n
+                return colors[index]
+            else:
+                return colors[(k - 1) % len(colors)]
+
+        return self._draw(data, color, evaluation, options)
+
+
+class PieChart(_Chart):
+    """
+    <dl>
+    <dt>'PieChart[{$p1$, $p2$ ...}]'
+        <dd>draws a pie chart.
+    </dl>
+
+    >> PieChart[{1, 4, 2}]
+     = -Graphics-
+
+    >> PieChart[{8, 16, 2}, SectorOrigin -> {Automatic, 1.5}]
+     = -Graphics-
+
+    >> PieChart[{{10, 20, 30}, {15, 22, 30}}]
+     = -Graphics-
+
+    >> PieChart[{{10, 20, 30}, {15, 22, 30}}, SectorSpacing -> None]
+     = -Graphics-
+
+    >> PieChart[{{10, 20, 30}, {15, 22, 30}}, ChartLabels -> {a, b, c}]
+     = -Graphics-
+
+    Negative values are clipped to 0.
+    >> PieChart[{1, -1, 3}]
+     = -Graphics-
+    """
+
+    options = _Chart.options.copy()
+    options.update({
+        'Axes': '{False, False}',
+        'AspectRatio': '1',
+        'SectorOrigin': '{Automatic, 0}',
+        'SectorSpacing': 'Automatic',
+    })
+
+    never_monochrome = True
+
+    def _draw(self, data, color, evaluation, options):
+        data = [[max(0., x) for x in group] for group in data]
+
+        sector_origin = self.get_option(options, 'SectorOrigin', evaluation)
+        if not sector_origin.has_form('List', 2):
+            return
+        sector_origin = Expression('N', sector_origin).evaluate(evaluation)
+
+        orientation = sector_origin.leaves[0]
+        if isinstance(orientation, Symbol) and orientation.get_name() == 'System`Automatic':
+            sector_phi = pi
+            sector_sign = -1.
+        elif orientation.has_form('List', 2) and isinstance(orientation.leaves[1], String):
+            sector_phi = orientation.leaves[0].round_to_float()
+            clock_name = orientation.leaves[1].get_string_value()
+            if clock_name == 'Clockwise':
+                sector_sign = -1.
+            elif clock_name == 'Counterclockwise':
+                sector_sign = 1.
+            else:
+                return
+        else:
+            return
+
+        sector_spacing = self.get_option(options, 'SectorSpacing', evaluation)
+        if isinstance(sector_spacing, Symbol):
+            if sector_spacing.get_name() == 'System`Automatic':
+                sector_spacing = Expression('List', Integer(0), Real(0.2))
+            elif sector_spacing.get_name() == 'System`None':
+                sector_spacing = Expression('List', Integer(0), Integer(0))
+            else:
+                return
+        if not sector_spacing.has_form('List', 2):
+            return
+        segment_spacing = 0.  # not yet implemented; needs real arc graphics
+        radius_spacing = max(0., min(1., sector_spacing.leaves[1].round_to_float()))
+
+        def vector2(x, y):
+            return Expression('List', Real(x), Real(y))
+
+        def radii():
+            outer = 2.
+            inner = sector_origin.leaves[1].round_to_float()
+            n = len(data)
+
+            d = (outer - inner) / n
+
+            r0 = outer
+            for i in range(n):
+                r1 = r0 - d
+                if i > 0:
+                    r0 -= radius_spacing * d
+                yield (r0, r1)
+                r0 = r1
+
+        def phis(values):
+            s = sum(values)
+
+            t = 0.
+            pi2 = pi * 2.
+            phi0 = pi
+            spacing = sector_sign * segment_spacing / 2.
+
+            for k, value in enumerate(values):
+                t += value
+                phi1 = sector_phi + sector_sign * (t / s) * pi2
+
+                yield (phi0 + spacing, phi1 - spacing)
+                phi0 = phi1
+
+        def segments():
+            yield Expression('EdgeForm', Symbol('Black'))
+
+            origin = vector2(0., 0.)
+
+            for values, (r0, r1) in zip(data, radii()):
+                radius = vector2(r0, r0)
+
+                n = len(values)
+
+                for k, (phi0, phi1) in enumerate(phis(values)):
+                    yield Expression('Style', Expression(
+                        'Disk', origin, radius, vector2(phi0, phi1)), color(k + 1, n))
+
+                if r1 > 0.:
+                    yield Expression('Style', Expression(
+                        'Disk', origin, vector2(r1, r1)), Symbol('White'))
+
+        def labels(names):
+            yield Expression('FaceForm', Symbol('Black'))
+
+            for values, (r0, r1) in zip(data, radii()):
+                for name, (phi0, phi1) in zip(names, phis(values)):
+                    r = (r0 + r1) / 2.
+                    phi = (phi0 + phi1) / 2.
+                    yield Expression('Text', name, vector2(r * cos(phi), r * sin(phi)))
+
+        graphics = list(segments())
+
+        chart_labels = self.get_option(options, 'ChartLabels', evaluation)
+        if chart_labels.get_head_name() == 'System`List':
+            graphics.extend(list(labels(chart_labels.leaves)))
+
+        options['System`PlotRange'] = Expression(
+            'List', vector2(-2., 2.), vector2(-2., 2.))
+
+        return Expression('Graphics', Expression('List', *graphics), *options_to_rules(options))
+
+
+class BarChart(_Chart):
+    """
+    <dl>
+    <dt>'BarChart[{$p1$, $p2$ ...}]'
+        <dd>draws a bar chart.
+    </dl>
+
+    >> BarChart[{1, 4, 2}]
+     = -Graphics-
+
+    >> BarChart[{1, 4, 2}, ChartStyle -> {Red, Green, Blue}]
+     = -Graphics-
+
+    >> BarChart[{{1, 2, 3}, {2, 3, 4}}]
+     = -Graphics-
+
+    >> BarChart[{{1, 2, 3}, {2, 3, 4}}, ChartLabels -> {"a", "b", "c"}]
+     = -Graphics-
+
+    >> BarChart[{{1, 5}, {3, 4}}, ChartStyle -> {{EdgeForm[Thin], White}, {EdgeForm[Thick], White}}]
+     = -Graphics-
+    """
+
+    options = _Chart.options.copy()
+    options.update({
+        'Axes': '{False, True}',
+        'AspectRatio': '1 / GoldenRatio',
+    })
+
+    def _draw(self, data, color, evaluation, options):
+        def vector2(x, y):
+            return Expression('List', Real(x), Real(y))
+
         def boxes():
             w = 0.9
-            s = 0.1
-            x = 0.6
+            s = 0.06
+            w_half = 0.5 * w
+            x = 0.1 + s + w_half
 
             for y_values in data:
                 y_length = len(y_values)
                 for i, y in enumerate(y_values):
-                    x0 = x - 0.5 * w
+                    x0 = x - w_half
                     x1 = x0 + w
                     yield (i + 1, y_length), x0, x1, y
-                    x = x1 + s
+                    x = x1 + s + w_half
 
                 x += 0.2
 
         def rectangles():
-            yield Expression('EdgeForm', Expression('RGBColor', 0, 0, 0))
+            yield Expression('EdgeForm', Symbol('Black'))
 
             last_x1 = 0
 
             for (k, n), x0, x1, y in boxes():
-                if spread_colors and n < len(colors):
-                    index = int(k * (len(colors) - 1)) // n
-                    color = colors[index]
-                else:
-                    color = colors[(k - 1) % len(colors)]
-
                 yield Expression('Style', Expression(
                     'Rectangle',
                     Expression('List', x0, 0),
-                    Expression('List', x1, y)), color)
+                    Expression('List', x1, y)), color(k, n))
 
                 last_x1 = x1
 
-            yield Expression('Line', Expression('List', Expression('List', 0, 0), Expression('List', last_x1, 0)))
+            yield Expression('Line', Expression('List', vector2(0, 0), vector2(last_x1, 0)))
 
         def axes():
-            yield Expression('FaceForm', Expression('RGBColor', 0, 0, 0))
+            yield Expression('FaceForm', Symbol('Black'))
 
             def points(x):
-                return Expression('List', Expression('List', x, 0), Expression('List', x, -0.2))
+                return Expression('List', vector2(x, 0), vector2(x, -0.2))
 
             for (k, n), x0, x1, y in boxes():
                 if k == 1:
@@ -763,12 +953,12 @@ class BarChart(Builtin):
                     yield Expression('Line', points(x1))
 
         def labels(names):
-            yield Expression('FaceForm', Expression('RGBColor', 0, 0, 0))
+            yield Expression('FaceForm', Symbol('Black'))
 
             for (k, n), x0, x1, y in boxes():
                 if k <= len(names):
                     name = names[k - 1]
-                    yield Expression('Text', name, Expression('List', (x0 + x1) / 2, -0.2))
+                    yield Expression('Text', name, vector2((x0 + x1) / 2, -0.2))
 
         x_coords = list(itertools.chain(*[[x0, x1] for (k, n), x0, x1, y in boxes()]))
         y_coords = [0] + [y for (k, n), x0, x1, y in boxes()]
@@ -790,7 +980,7 @@ class BarChart(Builtin):
         # at origin (0,0); otherwise it will be shifted right; see GraphicsBox.axis_ticks().
         x_range[0] = -.1
 
-        options['System`PlotRange'] = from_python([x_range, y_range])
+        options['System`PlotRange'] = Expression('List', vector2(*x_range), vector2(*y_range))
 
         return Expression('Graphics', Expression('List', *graphics), *options_to_rules(options))
 
@@ -820,10 +1010,6 @@ class Histogram(Builtin):
         'Mesh': 'None',
         'PlotRange': 'Automatic',
     })
-
-    requires = (
-        'palettable',
-    )
 
     def apply(self, points, spec, evaluation, options):
         '%(name)s[points_, spec___, OptionsPattern[%(name)s]]'
@@ -929,19 +1115,33 @@ class Histogram(Builtin):
             return sum(d.cost() for d in distributions), distributions
 
         def best_distributions(n_bins, dir, cost0, distributions0):
+            if dir > 0:
+                step_size = (max_bins - n_bins) // 2
+            else:
+                step_size = (n_bins - 1) // 2
+            if step_size < 1:
+                step_size = 1
+
             while True:
-                n_bins += dir
-                if n_bins < 1 or n_bins > max_bins:
-                    break
-                cost, distributions = compute_cost(n_bins)
-                if cost > cost0:
-                    break
-                cost0 = cost
-                distributions0 = distributions
+                new_n_bins = n_bins + dir * step_size
+                if new_n_bins < 1 or new_n_bins > max_bins:
+                    good = False
+                else:
+                    cost, distributions = compute_cost(new_n_bins)
+                    good = cost < cost0
+
+                if not good:
+                    if step_size == 1:
+                        break
+                    step_size = max(step_size // 2, 1)
+                else:
+                    n_bins = new_n_bins
+                    cost0 = cost
+                    distributions0 = distributions
+
             return cost0, distributions0
 
         def graphics(distributions):
-            import palettable
             palette = palettable.wesanderson.FantasticFox1_5
             colors = list(reversed(palette.mpl_colors))
 
