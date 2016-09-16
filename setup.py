@@ -161,7 +161,8 @@ setup(
         'mathics.core.parser',
         'mathics.builtin', 'mathics.builtin.pymimesniffer', 'mathics.builtin.numpy_utils',
         'mathics.doc',
-        'mathics.web', 'mathics.web.templatetags'
+        'mathics.web', 'mathics.web.templatetags',
+        'mathics.layout',
     ],
 
     install_requires=INSTALL_REQUIRES,
@@ -180,6 +181,7 @@ setup(
             'media/js/three/Detector.js', 'media/js/*.js', 'templates/*.html',
             'templates/doc/*.html'] + mathjax_files,
         'mathics.builtin.pymimesniffer': ['mimetypes.xml'],
+        'mathics.layout': ['server.js'],
     },
 
     entry_points={
