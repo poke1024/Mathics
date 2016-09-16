@@ -81,6 +81,9 @@ class Coords(object):
         p = (self.p[0] + x, self.p[1] + y)
         return Coords(self.graphics, pos=p)
 
+    def is_absolute(self):
+        return False
+
 
 class AxisCoords(Coords):
     def __init__(self, graphics, expr=None, pos=None, d=None):
@@ -99,6 +102,9 @@ class AxisCoords(Coords):
 
     def add(self, x, y):
         raise NotImplementedError
+
+    def is_absolute(self):
+        return True
 
 
 def cut(value):
@@ -410,7 +416,7 @@ class Graphics(Builtin):
 
     In 'TeXForm', 'Graphics' produces Asymptote figures:
     >> Graphics[Circle[]] // TeXForm
-     =
+     = 
      . \begin{asy}
      . size(5.8556cm, 5.8333cm);
      . add((175,175,175,0,0,175)*(new picture(){picture s=currentpicture,t=new picture;currentpicture=t;draw(ellipse((0,0),1,1), rgb(0, 0, 0)+linewidth(0.0038095));currentpicture=s;return t;})());
@@ -2289,6 +2295,9 @@ class Rotate(Builtin):
 
     >> Graphics[{Rotate[Rectangle[{0, 0}, {0.2, 0.2}], 1.2, {0.1, 0.1}], Red, Disk[{0.1, 0.1}, 0.05]}]
      = -Graphics-
+
+    >> Graphics[Table[Rotate[Scale[{RGBColor[i,1-i,1],Rectangle[],Black,Text["ABC",{0.5,0.5}]},1-i],Pi*i], {i,0,1,0.2}]]
+     = -Graphics-
     """
 
     rules = {
@@ -2371,14 +2380,12 @@ class GeometricTransformationBox(_GraphicsElement):
 
 
 class InsetBox(_GraphicsElement):
-    def init(self, graphics, style, item=None, content=None, pos=None,
-             opos=(0, 0), absolute_coordinates=False):
+    def init(self, graphics, style, item=None, content=None, pos=None, opos=(0, 0)):
         super(InsetBox, self).init(graphics, item, style)
 
         self.color = self.style.get_option('System`FontColor')
         if self.color is None:
             self.color, _ = style.get_style(_Color, face_element=False)
-        self.absolute_coordinates = absolute_coordinates
 
         if item is not None:
             if len(item.leaves) not in (1, 2, 3):
@@ -2403,7 +2410,7 @@ class InsetBox(_GraphicsElement):
 
     def extent(self):
         p = self.pos.pos()
-        s = 0.01
+        s = 0.01  # .1 / (self.graphics.pixel_width or 1.)
         h = s * 25
         w = len(self.content_text) * \
             s * 7  # rough approximation by numbers of characters
@@ -2414,15 +2421,23 @@ class InsetBox(_GraphicsElement):
 
     def to_svg(self):
         x, y = self.pos.pos()
+        absolute = self.pos.is_absolute()
+
         content = self.content.boxes_to_xml(
             evaluation=self.graphics.evaluation)
         style = create_css(font_color=self.color)
+
+        if not absolute:
+            x, y = list(self.graphics.local_to_screen.transform([(x, y)]))[0]
+
         svg = (
             '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
             '<math>%s</math></foreignObject>') % (
                 x, y, self.opos[0], self.opos[1], style, content)
-        if not self.absolute_coordinates:
-            svg = self.graphics.text_matrix.to_svg(svg)
+
+        if not absolute:
+            svg = self.graphics.inverse_local_to_screen.to_svg(svg)
+
         return svg
 
     def to_asy(self):
@@ -2708,7 +2723,7 @@ class GraphicsElements(_GraphicsElements):
 
         self.elements[0].patch_transforms([transform])
         self.local_to_screen = transform
-        self.text_matrix = _Transform([[1. / sx, 0, 0], [0, 1. / sy, 0], [0, 0, 1]])
+        self.inverse_local_to_screen = transform.inverse()
 
     def add_axis_element(self, e):
         # axis elements are added after the GeometricTransformationBox and are thus not
@@ -3167,7 +3182,7 @@ clip(%s);
                         elements, tick_label_style,
                         content=content,
                         pos=AxisCoords(elements, pos=p_origin(x),
-                                   d=p_self0(-tick_label_d)), opos=p_self0(1), absolute_coordinates=True))
+                        d=p_self0(-tick_label_d)), opos=p_self0(1)))
                 for x in ticks_small:
                     pos = p_origin(x)
                     ticks_lines.append([AxisCoords(elements, pos=pos),
