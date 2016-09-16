@@ -178,6 +178,7 @@ class TerminalShell(LineFeeder):
 
 class TerminalOutput(Output):
     def __init__(self, shell):
+        super(TerminalOutput, self).__init__()
         self.shell = shell
 
     def out(self, out):

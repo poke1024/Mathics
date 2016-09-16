@@ -462,7 +462,7 @@ class Evaluation(object):
 
         return list(itertools.chain(left_leaves, ellipsis, reversed(right_leaves)))
 
-    def message(self, symbol, tag, *args, once=False):
+    def message(self, symbol, tag, *args, **kwargs):
         from mathics.core.expression import (String, Symbol, Expression,
                                              from_python)
 
@@ -473,7 +473,7 @@ class Evaluation(object):
 
         pattern = Expression('MessageName', Symbol(symbol), String(tag))
 
-        if once:
+        if kwargs.get('once', False):
             if pattern in self.once_messages:
                 return
             self.once_messages.add(pattern)

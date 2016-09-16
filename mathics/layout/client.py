@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# you may use "NODE" in settings.py to specify a custom node binary, and you may use NODE_PATH in settings.py
-# to specify a custom node_modules path (that has the necessary node modules mathjax-node, ...).
-#
 # Your installation of nodejs with the following packages: mathjax-node svg2png (install them using
 # npm).
 
@@ -14,8 +11,6 @@
 import subprocess
 from subprocess import Popen
 import os
-
-from mathics import settings
 
 import socket
 import json
@@ -107,6 +102,53 @@ class NoWebEngine:
         raise WebEngineUnavailable
 
 
+def _normalize_svg(svg):
+    import xml.etree.ElementTree as ET
+    import base64
+    import re
+
+    ET.register_namespace('', 'http://www.w3.org/2000/svg')
+    root = ET.fromstring(svg)
+    prefix = 'data:image/svg+xml;base64,'
+
+    def rewrite(up):
+        changes = []
+
+        for i, node in enumerate(up):
+            if node.tag == '{http://www.w3.org/2000/svg}image':
+                src = node.attrib.get('src', '')
+                if src.startswith(prefix):
+                    attrib = node.attrib
+
+                    if 'width' in attrib and 'height' in attrib:
+                        target_width = float(attrib['width'])
+                        target_height = float(attrib['height'])
+                        target_transform = attrib.get('transform', '')
+
+                        image_svg = _normalize_svg(base64.b64decode(src[len(prefix):]))
+                        root = ET.fromstring(image_svg)
+
+                        view_box = re.split('\s+', root.attrib.get('viewBox', ''))
+
+                        if len(view_box) == 4:
+                            x, y, w, h = (float(t) for t in view_box)
+                            root.tag = '{http://www.w3.org/2000/svg}g'
+                            root.attrib = {'transform': '%s scale(%f, %f) translate(%f, %f)' % (
+                                target_transform, target_width / w, target_height / h, -x, -y)}
+
+                            changes.append((i, node, root))
+            else:
+                rewrite(node)
+
+        for i, node, new_node in reversed(changes):
+            up.remove(node)
+            up.insert(i, new_node)
+
+    rewrite(root)
+
+    return ET.tostring(root, 'utf8').decode('utf8')
+
+
 class WebEngine:
     def __init__(self):
         self.process = None
@@ -116,8 +158,6 @@ class WebEngine:
     def _create_client(self):
         try:
             popen_env = os.environ.copy()
-            if settings.NODE_MODULES:
-                popen_env["NODE_PATH"] = os.path.expandvars(settings.NODE_MODULES)
 
             server_path = os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), 'server.js')
@@ -127,7 +167,7 @@ class WebEngine:
                 raise WebEngineUnavailable(error_text + message)
 
             process = Popen(
-                [os.path.expandvars(settings.NODE), server_path],
+                ['node', server_path],
                 stdout=subprocess.PIPE,
                 env=popen_env)
 
@@ -178,7 +218,7 @@ class WebEngine:
         return self._ensure_client().mathml_to_svg(mathml)
 
     def rasterize(self, svg, size):
-        buffer = self._ensure_client().rasterize(svg, size)
+        buffer = self._ensure_client().rasterize(_normalize_svg(svg), size)
         return bytearray(buffer['data'])
 
     def terminate(self):
