@@ -432,6 +432,11 @@ class _Reader:
         # self.token_words = py_options['TokenWords']
         self.word_separators = py_options['WordSeparators']
 
+        self._read_word_iterator = self._read_word()
+        self._read_record_iterator = self._read_record()
+        self._read_number_iterator = self._read_number()
+        self._read_real_iterator = self._read_real()
+
     def read(self, types):
         for t in types:
             m = _read_methods.get(t.get_name(), None)
@@ -496,14 +501,14 @@ class _Reader:
         return String(tmp)
 
     def read_expression(self):
-        tmp = next(self._read_record)
+        tmp = next(self._read_record_iterator)
         expr = self.evaluation.parse(tmp)
         if expr is None:
             raise MessageException('Read', 'readt', tmp, self.stream)
         return from_python(tmp)
 
     def read_number(self):
-        tmp = next(self._read_number)
+        tmp = next(self._read_number_iterator)
         try:
             tmp = int(tmp)
         except ValueError:
@@ -514,7 +519,7 @@ class _Reader:
         return Integer(tmp)
 
     def read_real(self):
-        tmp = next(self._read_real)
+        tmp = next(self._read_real_iterator)
         tmp = tmp.replace('*^', 'E')
         try:
             tmp = float(tmp)
@@ -523,7 +528,7 @@ class _Reader:
         return Real(tmp)
 
     def read_record(self):
-        return from_python(next(self._read_record))
+        return from_python(next(self._read_record_iterator))
 
     def read_string(self):
         tmp = self.py_stream.readline()
@@ -532,7 +537,7 @@ class _Reader:
         return String(tmp.rstrip('\n'))
 
     def read_word(self):
-        return String(next(self._read_word))
+        return String(next(self._read_word_iterator))
 
 
 _read_methods = system_symbols_dict({
