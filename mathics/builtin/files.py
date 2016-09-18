@@ -27,11 +27,11 @@ from six.moves import range
 from six import unichr
 
 from mathics.core.expression import (Expression, Real, Complex, String, Symbol,
-                                     from_python, Integer, BoxError,
+                                     from_python, system_symbols_dict, Integer, BoxError,
                                      MachineReal, Number, valid_context_name)
 from mathics.core.numbers import dps
 from mathics.builtin.base import (Builtin, Predefined, BinaryOperator,
-                                  PrefixOperator)
+                                  PrefixOperator, MessageException)
 from mathics.builtin.numeric import Hash
 from mathics.settings import ROOT_DIR
 
@@ -418,6 +418,135 @@ class Word(Builtin):
     """
 
 
+class _Reader:
+    def __init__(self, stream, py_stream, py_options, evaluation):
+        self.stream = stream
+        self.py_stream = py_stream
+        self.evaluation = evaluation
+
+        # Options
+        # TODO Implement extra options
+        # self.null_records = py_options['NullRecords']
+        # self.null_words = py_options['NullWords']
+        self.record_separators = py_options['RecordSeparators']
+        # self.token_words = py_options['TokenWords']
+        self.word_separators = py_options['WordSeparators']
+
+    def read(self, types):
+        for t in types:
+            m = _read_methods.get(t.get_name(), None)
+            if m is None:
+                raise MessageException('Read', 'readf', t)
+            yield m(self)
+
+    def _read(self, word_separators, accepted=None):
+        stream = self.py_stream
+
+        while True:
+            word = ''
+            while True:
+                tmp = stream.read(1)
+
+                if tmp == '':
+                    if word == '':
+                        raise EOFError
+                    yield word
+
+                if tmp in word_separators:
+                    if word == '':
+                        break
+                    if stream.seekable():
+                        # stream.seek(-1, 1) #Python3
+                        stream.seek(stream.tell() - 1)
+                    yield word
+
+                if accepted is not None and tmp not in accepted:
+                    yield word
+
+                word += tmp
+
+    def _read_word(self):
+        for item in self._read(self.word_separators):
+            yield item
+
+    def _read_record(self):
+        for item in self._read(self.record_separators):
+            yield item
+
+    def _read_number(self):
+        for item in self._read(self.word_separators + self.record_separators,
+                               ['+', '-', '.'] + [str(i) for i in range(10)]):
+            yield item
+
+    def _read_real(self):
+        for item in self._read(self.word_separators + self.record_separators,
+                               ['+', '-', '.', 'e', 'E', '^', '*'] + [str(i) for i in range(10)]):
+            yield item
+
+    def read_byte(self):
+        tmp = self.py_stream.read(1)
+        if tmp == '':
+            raise EOFError
+        return Integer(ord(tmp))
+
+    def read_character(self):
+        tmp = self.py_stream.read(1)
+        if tmp == '':
+            raise EOFError
+        return String(tmp)
+
+    def read_expression(self):
+        tmp = next(self._read_record)
+        expr = self.evaluation.parse(tmp)
+        if expr is None:
+            raise MessageException('Read', 'readt', tmp, self.stream)
+        return from_python(tmp)
+
+    def read_number(self):
+        tmp = next(self._read_number)
+        try:
+            tmp = int(tmp)
+        except ValueError:
+            try:
+                tmp = float(tmp)
+            except ValueError:
+                raise MessageException('Read', 'readn', self.stream)
+        return Integer(tmp)
+
+    def read_real(self):
+        tmp = next(self._read_real)
+        tmp = tmp.replace('*^', 'E')
+        try:
+            tmp = float(tmp)
+        except ValueError:
+            raise MessageException('Read', 'readn', self.stream)
+        return Real(tmp)
+
+    def read_record(self):
+        return from_python(next(self._read_record))
+
+    def read_string(self):
+        tmp = self.py_stream.readline()
+        if not tmp:
+            raise EOFError
+        return String(tmp.rstrip('\n'))
+
+    def read_word(self):
+        return String(next(self._read_word))
+
+
+_read_methods = system_symbols_dict({
+    'Byte': _Reader.read_byte,
+    'Character': _Reader.read_character,
+    'Expression': _Reader.read_expression,
+    'Number': _Reader.read_number,
+    'Real': _Reader.read_real,
+    'Record': _Reader.read_record,
+    'String': _Reader.read_string,
+    'Word': _Reader.read_word,
+})
+
+
 class Read(Builtin):
     """
     <dl>
@@ -549,6 +678,10 @@ class Read(Builtin):
 
     attributes = ('Protected')
 
+    read_types = frozenset((Symbol(k) for k in
+                  ['Byte', 'Character', 'Expression',
+                   'Number', 'Real', 'Record', 'String', 'Word']))
+
     def check_options(self, options):
         # Options
         # TODO Proper error messages
@@ -624,7 +757,7 @@ class Read(Builtin):
         if strm is None:
             return
 
-        [name, n] = strm.get_leaves()
+        _, n = strm.get_leaves()
 
         stream = _lookup_stream(n.get_int_value())
 
@@ -636,119 +769,22 @@ class Read(Builtin):
         if not types.has_form('List', None):
             types = Expression('List', types)
 
-        READ_TYPES = [Symbol(k) for k in
-                      ['Byte', 'Character', 'Expression',
-                       'Number', 'Real', 'Record', 'String', 'Word']]
-
-        for typ in types.leaves:
-            if typ not in READ_TYPES:
-                evaluation.message('Read', 'readf', typ)
-                return Symbol('$Failed')
-
-        # Options
-        # TODO Implement extra options
         py_options = self.check_options(options)
-        # null_records = py_options['NullRecords']
-        # null_words = py_options['NullWords']
-        record_separators = py_options['RecordSeparators']
-        # token_words = py_options['TokenWords']
-        word_separators = py_options['WordSeparators']
 
-        name = name.to_python()
+        reader = _Reader(strm, stream, py_options, evaluation)
 
-        result = []
-
-        def reader(stream, word_separators, accepted=None):
-            while True:
-                word = ''
-                while True:
-                    tmp = stream.read(1)
-
-                    if tmp == '':
-                        if word == '':
-                            raise EOFError
-                        yield word
-
-                    if tmp in word_separators:
-                        if word == '':
-                            break
-                        if stream.seekable():
-                            # stream.seek(-1, 1) #Python3
-                            stream.seek(stream.tell() - 1)
-                        yield word
-
-                    if accepted is not None and tmp not in accepted:
-                        yield word
-
-                    word += tmp
-
-        read_word = reader(stream, word_separators)
-        read_record = reader(stream, record_separators)
-        read_number = reader(stream, word_separators + record_separators,
-                             ['+', '-', '.'] + [str(i) for i in range(10)])
-        read_real = reader(
-            stream, word_separators + record_separators,
-            ['+', '-', '.', 'e', 'E', '^', '*'] + [str(i) for i in range(10)])
-        for typ in types.leaves:
-            try:
-                if typ == Symbol('Byte'):
-                    tmp = stream.read(1)
-                    if tmp == '':
-                        raise EOFError
-                    result.append(ord(tmp))
-                elif typ == Symbol('Character'):
-                    tmp = stream.read(1)
-                    if tmp == '':
-                        raise EOFError
-                    result.append(tmp)
-                elif typ == Symbol('Expression'):
-                    tmp = next(read_record)
-                    expr = evaluation.parse(tmp)
-                    if expr is None:
-                        evaluation.message('Read', 'readt', tmp, Expression(
-                            'InputSteam', name, n))
-                        return Symbol('$Failed')
-                    result.append(tmp)
-                elif typ == Symbol('Number'):
-                    tmp = next(read_number)
-                    try:
-                        tmp = int(tmp)
-                    except ValueError:
-                        try:
-                            tmp = float(tmp)
-                        except ValueError:
-                            evaluation.message('Read', 'readn', Expression(
-                                'InputSteam', name, n))
-                            return Symbol('$Failed')
-                    result.append(tmp)
-
-                elif typ == Symbol('Real'):
-                    tmp = next(read_real)
-                    tmp = tmp.replace('*^', 'E')
-                    try:
-                        tmp = float(tmp)
-                    except ValueError:
-                        evaluation.message('Read', 'readn', Expression(
-                            'InputSteam', name, n))
-                        return Symbol('$Failed')
-                    result.append(tmp)
-                elif typ == Symbol('Record'):
-                    result.append(next(read_record))
-                elif typ == Symbol('String'):
-                    tmp = stream.readline()
-                    if len(tmp) == 0:
-                        raise EOFError
-                    result.append(tmp.rstrip('\n'))
-                elif typ == Symbol('Word'):
-                    result.append(next(read_word))
-
-            except EOFError:
-                return Symbol('EndOfFile')
+        try:
+            result = list(reader.read(types.leaves))
+        except EOFError:
+            return Symbol('EndOfFile')
+        except MessageException as e:
+            e.message(evaluation)
+            return Symbol('$Failed')
 
         if len(result) == 1:
-            return from_python(*result)
+            return result[0]
 
-        return from_python(result)
+        return Expression('List', *result)
 
     def apply_nostream(self, arg1, arg2, evaluation):
         'Read[arg1_, arg2_]'
@@ -2836,17 +2872,22 @@ class ReadList(Read):
         # word_separators = py_options['WordSeparators']
 
         result = []
+        read = super(ReadList, self)
+
         while True:
-            tmp = super(ReadList, self).apply(
+            tmp = read.apply(
                 channel, types, evaluation, options)
 
-            if tmp == Symbol('$Failed'):
-                return
+            sym = tmp.get_name()
 
-            if tmp == Symbol('EndOfFile'):
+            if sym == 'System`$Failed':
+                return tmp
+            elif sym == 'System`EndOfFile':
                 break
+
             result.append(tmp)
-        return from_python(result)
+
+        return Expression('List', *result)
 
     def apply_m(self, channel, types, m, evaluation, options):
         'ReadList[channel_, types_, m_, OptionsPattern[ReadList]]'

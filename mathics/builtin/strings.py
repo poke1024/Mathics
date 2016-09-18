@@ -660,7 +660,7 @@ class StringSplit(Builtin):
             re_patts.append(py_p)
 
         flags = re.MULTILINE
-        if options['System`IgnoreCase'] == Symbol('True'):
+        if options['System`IgnoreCase'].is_true():
             flags = flags | re.IGNORECASE
 
         result = [py_string]

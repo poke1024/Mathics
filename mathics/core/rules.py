@@ -12,6 +12,9 @@ class StopGenerator_BaseRule(StopGenerator):
     pass
 
 
+_sequence = Symbol('Sequence')
+
+
 class BaseRule(KeyComparable):
     def __init__(self, pattern, system=False):
         self.pattern = Pattern.create(pattern)
@@ -48,7 +51,7 @@ class BaseRule(KeyComparable):
             # Flatten out sequences (important for Rule itself!)
 
             def flatten(expr):
-                new_expr = expr.flatten(Symbol('Sequence'), pattern_only=True)
+                new_expr = expr.flatten(_sequence, pattern_only=True)
                 if not new_expr.is_atom():
                     for index, leaf in enumerate(new_expr.leaves):
                         new_expr.leaves[index] = flatten(leaf)
