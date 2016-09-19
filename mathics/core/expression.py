@@ -844,7 +844,7 @@ class Expression(BaseExpression):
 
             if ('System`SequenceHold' not in attributes and    # noqa
                 'System`HoldAllComplete' not in attributes):
-                work_expr = work_expr.flatten(SEQUENCE)
+                work_expr = work_expr.flatten(Symbol('Sequence'))
 
             for leaf in work_expr.leaves:
                 leaf.unevaluated = False
@@ -863,7 +863,6 @@ class Expression(BaseExpression):
                 for leaf in new_leaves:
                     leaf.unevaluated = old.unevaluated
 
-            new = Expression(head, *leaves)
             if 'System`Flat' in attributes:
                 work_expr = work_expr.flatten(work_expr.head, callback=flatten_callback)
             if 'System`Orderless' in attributes:
