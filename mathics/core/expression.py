@@ -8,6 +8,7 @@ import sympy
 import mpmath
 import math
 import re
+from itertools import chain
 
 from mathics.core.numbers import get_type, dps, prec, min_prec, machine_precision
 from mathics.core.convert import sympy_symbol_prefix, SympyExpression
@@ -774,113 +775,142 @@ class Expression(BaseExpression):
             # changed before last evaluated
             if self.last_evaluated is not None and evaluation.definitions.last_changed(self) <= self.last_evaluated:
                 return self
-            head = self.head.evaluate(evaluation)
-            attributes = head.get_attributes(evaluation.definitions)
-            leaves = self.leaves[:]
 
-            def rest_range(indices):
-                if 'System`HoldAllComplete' not in attributes:
+            unevaluated_head = self.head
+            head = unevaluated_head.evaluate(evaluation)
+            attributes = head.get_attributes(evaluation.definitions)
+
+            def evaluated_leaves(expr):
+                leaves = expr.leaves
+
+                def rest_range(indices):
+                    if 'System`HoldAllComplete' not in attributes:
+                        for index in indices:
+                            leaf = leaves[index]
+                            if leaf.has_form('Evaluate', 1):
+                                new_leaf = leaf.evaluate(evaluation)
+                                if id(leaf) != id(new_leaf):
+                                    yield index, new_leaf
+
+                def eval_range(indices):
                     for index in indices:
                         leaf = leaves[index]
-                        if leaf.has_form('Evaluate', 1):
-                            leaves[index] = leaf.evaluate(evaluation)
+                        if not leaf.has_form('Unevaluated', 1):
+                            new_leaf = leaf.evaluate(evaluation)
+                            if id(leaf) != id(new_leaf):
+                                yield index, new_leaf
 
-            def eval_range(indices):
-                for index in indices:
-                    leaf = leaves[index]
-                    if not leaf.has_form('Unevaluated', 1):
-                        leaves[index] = leaf.evaluate(evaluation)
+                if 'System`HoldAll' in attributes or 'System`HoldAllComplete' in attributes:
+                    # eval_range(range(0, 0))
+                    return chain(rest_range(range(len(leaves))))
+                elif 'System`HoldFirst' in attributes:
+                    return chain(
+                        rest_range(range(0, min(1, len(leaves)))),
+                        eval_range(range(1, len(leaves))))
+                elif 'System`HoldRest' in attributes:
+                    return chain(
+                        eval_range(range(0, min(1, len(leaves)))),
+                        rest_range(range(1, len(leaves))))
+                else:
+                    return chain(eval_range(range(len(leaves))))
+                    # rest_range(range(0, 0))
 
-            if 'System`HoldAll' in attributes or 'System`HoldAllComplete' in attributes:
-                # eval_range(range(0, 0))
-                rest_range(range(len(leaves)))
-            elif 'System`HoldFirst' in attributes:
-                rest_range(range(0, min(1, len(leaves))))
-                eval_range(range(1, len(leaves)))
-            elif 'System`HoldRest' in attributes:
-                eval_range(range(0, min(1, len(leaves))))
-                rest_range(range(1, len(leaves)))
-            else:
-                eval_range(range(len(leaves)))
-                # rest_range(range(0, 0))
+            def copy_on_write(expr, changes):
+                if id(expr) != id(self):
+                    leaves = expr.leaves
+                    for i, leaf in changes:
+                        leaves[i] = leaf
+                    return expr
 
-            new = Expression(head, *leaves)
+                first = next(changes, None)
+                if first is not None:
+                    leaves = expr.leaves[:]
+                    for i, leaf in chain([first], changes):
+                        leaves[i] = leaf
+                    return Expression(head, *leaves)
+                else:
+                    return expr
+
+            work_expr = copy_on_write(self, evaluated_leaves(self))
+
+            if id(work_expr) == id(self) and id(unevaluated_head) != id(head):
+                work_expr = Expression(head, *work_expr.leaves)
 
             if ('System`SequenceHold' not in attributes and    # noqa
                 'System`HoldAllComplete' not in attributes):
-                new = new.flatten(SEQUENCE)
-                leaves = new.leaves
+                work_expr = work_expr.flatten(SEQUENCE)
 
-            for leaf in leaves:
+            for leaf in work_expr.leaves:
                 leaf.unevaluated = False
 
-            if 'System`HoldAllComplete' not in attributes:
-                dirty_new = False
+            def unpackaged_leaves(expr):
+                if 'System`HoldAllComplete' not in attributes:
+                    for index, leaf in enumerate(expr.leaves):
+                        if leaf.has_form('Unevaluated', 1):
+                            new_leaf = leaf.leaves[0]
+                            new_leaf.unevaluated = True
+                            yield index, new_leaf
 
-                for index, leaf in enumerate(leaves):
-                    if leaf.has_form('Unevaluated', 1):
-                        leaves[index] = leaf.leaves[0]
-                        leaves[index].unevaluated = True
-                        dirty_new = True
-
-                if dirty_new:
-                    new = Expression(head, *leaves)
+            work_expr = copy_on_write(work_expr, unpackaged_leaves(work_expr))
 
             def flatten_callback(new_leaves, old):
                 for leaf in new_leaves:
                     leaf.unevaluated = old.unevaluated
 
             if 'System`Flat' in attributes:
-                new = new.flatten(new.head, callback=flatten_callback)
+                work_expr = work_expr.flatten(work_expr.head, callback=flatten_callback)
             if 'System`Orderless' in attributes:
-                new.sort()
+                work_expr.sort()
 
-            new.last_evaluated = evaluation.definitions.now
+            work_expr.last_evaluated = evaluation.definitions.now
 
             if 'System`Listable' in attributes:
-                done, threaded = new.thread(evaluation)
+                done, threaded = work_expr.thread(evaluation)
                 if done:
-                    if threaded.same(new):
-                        new.last_evaluated = evaluation.definitions.now
-                        return new
+                    if threaded.same(work_expr):
+                        work_expr.last_evaluated = evaluation.definitions.now
+                        return work_expr
                     else:
                         return threaded.evaluate(evaluation)
 
-            def rules():
+            def rules(expr):
                 rules_names = set()
                 if 'System`HoldAllComplete' not in attributes:
-                    for leaf in leaves:
+                    for leaf in work_expr.leaves:
                         name = leaf.get_lookup_name()
                         if len(name) > 0:  # only lookup rules if this is a symbol
                             if name not in rules_names:
                                 rules_names.add(name)
                                 for rule in evaluation.definitions.get_upvalues(name):
                                     yield rule
-                lookup_name = new.get_lookup_name()
-                if lookup_name == new.get_head_name():
+                lookup_name = expr.get_lookup_name()
+                if lookup_name == expr.get_head_name():
                     for rule in evaluation.definitions.get_downvalues(lookup_name):
                         yield rule
                 else:
                     for rule in evaluation.definitions.get_subvalues(lookup_name):
                         yield rule
 
-            for rule in rules():
-                result = rule.apply(new, evaluation, fully=False)
+            for rule in rules(work_expr):
+                result = rule.apply(work_expr, evaluation, fully=False)
                 if result is not None:
-                    if result.same(new):
-                        new.last_evaluated = evaluation.definitions.now
-                        return new
+                    if result.same(work_expr):
+                        work_expr.last_evaluated = evaluation.definitions.now
+                        return work_expr
                     else:
                         return result.evaluate(evaluation)
 
-            # Expression did not change, re-apply Unevaluated
-            for index, leaf in enumerate(new.leaves):
-                if leaf.unevaluated:
-                    new.leaves[index] = Expression('Unevaluated', leaf)
+            def packaged_leaves(expr):
+                # Expression did not change, re-apply Unevaluated
+                for index, leaf in enumerate(expr.leaves):
+                    if leaf.unevaluated:
+                        yield index, Expression('Unevaluated', leaf)
 
-            new.unformatted = self.unformatted
-            new.last_evaluated = evaluation.definitions.now
-            return new
+            work_expr = copy_on_write(work_expr, packaged_leaves(work_expr))
+
+            work_expr.unformatted = self.unformatted
+            work_expr.last_evaluated = evaluation.definitions.now
+            return work_expr
 
         # "Return gets discarded only if it was called from within the r.h.s.
         # of a user-defined rule."
