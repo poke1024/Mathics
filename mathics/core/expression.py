@@ -815,6 +815,12 @@ class Expression(BaseExpression):
                     return chain(eval_range(range(len(leaves))))
                     # rest_range(range(0, 0))
 
+            def copy(expr):
+                if id(expr) != id(self):
+                    return expr
+                else:
+                    return Expression(head, *expr.leaves)
+
             def copy_on_write(expr, changes):
                 if id(expr) != id(self):
                     leaves = expr.leaves
@@ -860,9 +866,10 @@ class Expression(BaseExpression):
             if 'System`Flat' in attributes:
                 work_expr = work_expr.flatten(work_expr.head, callback=flatten_callback)
             if 'System`Orderless' in attributes:
+                work_expr = copy(work_expr)
                 work_expr.sort()
 
-            work_expr.last_evaluated = evaluation.definitions.now
+            # work_expr.last_evaluated = evaluation.definitions.now
 
             if 'System`Listable' in attributes:
                 done, threaded = work_expr.thread(evaluation)
@@ -876,7 +883,7 @@ class Expression(BaseExpression):
             def rules(expr):
                 rules_names = set()
                 if 'System`HoldAllComplete' not in attributes:
-                    for leaf in work_expr.leaves:
+                    for leaf in expr.leaves:
                         name = leaf.get_lookup_name()
                         if len(name) > 0:  # only lookup rules if this is a symbol
                             if name not in rules_names:
