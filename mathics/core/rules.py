@@ -12,10 +12,21 @@ class StopGenerator_BaseRule(StopGenerator):
     pass
 
 
+def _flatten(expr):
+    new_expr = expr.flatten(SEQUENCE, pattern_only=True)
+    if not new_expr.is_atom():
+        for index, leaf in enumerate(new_expr.leaves):
+            new_expr.leaves[index] = _flatten(leaf)
+    if hasattr(expr, 'options'):
+        new_expr.options = expr.options
+    return new_expr
+
+
 class BaseRule(KeyComparable):
     def __init__(self, pattern, system=False):
         self.pattern = Pattern.create(pattern)
         self.system = system
+        self.iform = None  # cached immutable form
 
     def apply(self, expression, evaluation, fully=True, return_list=False,
               max_list=None):
@@ -25,7 +36,32 @@ class BaseRule(KeyComparable):
         if return_list and max_list is not None and max_list <= 0:
             return []
 
+        def send(result):
+            if return_list:
+                result_list.append(result)
+                # count += 1
+                if max_list is not None and len(result_list) >= max_list:
+                    # return result_list
+                    raise StopGenerator_BaseRule(result_list)
+            else:
+                raise StopGenerator_BaseRule(result)
+                # only first possibility counts
+
         def yield_match(vars, rest):
+            if not vars and not rest:  # cache this important border case
+                if self.iform is not None:  # cached already?
+                    cached, result = self.iform
+                    if cached:
+                        send(result)
+                else:  # try to cache
+                    result = self.do_replace({}, {}, evaluation)
+                    if result is None:  # cannot cache if result is None
+                        self.iform = (False, None)
+                    else:
+                        result = _flatten(result)
+                        self.iform = (True, result)
+                        send(result)
+
             if rest is None:
                 rest = ([], [])
             if 0 < len(rest[0]) + len(rest[1]) == len(expression.get_leaves()):
@@ -45,28 +81,8 @@ class BaseRule(KeyComparable):
             else:
                 result = new_expression
 
-            # Flatten out sequences (important for Rule itself!)
-
-            def flatten(expr):
-                new_expr = expr.flatten(SEQUENCE, pattern_only=True)
-                if not new_expr.is_atom():
-                    for index, leaf in enumerate(new_expr.leaves):
-                        new_expr.leaves[index] = flatten(leaf)
-                if hasattr(expr, 'options'):
-                    new_expr.options = expr.options
-                return new_expr
-
-            result = flatten(result)
-            if return_list:
-                result_list.append(result)
-                # count += 1
-                if max_list is not None and len(result_list) >= max_list:
-                    # return result_list
-                    raise StopGenerator_BaseRule(result_list)
-            else:
-                raise StopGenerator_BaseRule(result)
-
-                # only first possibility counts
+            result = _flatten(result)  # flatten out sequences (important for Rule itself!)
+            send(result)
 
         try:
             self.pattern.match(
