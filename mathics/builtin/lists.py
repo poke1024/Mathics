@@ -331,24 +331,35 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
         def select(inner):
             for index_item in index_list:
                 int_index = index_item.value
+                n = len(inner.leaves)
 
                 if int_index == 0:
                     yield inner.head
-                elif 1 <= int_index <= len(inner.leaves):
+                elif 1 <= int_index <= n:
                     yield inner.leaves[int_index - 1]
+                elif -n <= int_index <= -1:
+                    yield inner.leaves[int_index]
                 else:
                     raise MessageException('Part', 'partw', index_item, inner)
 
         return select
 
-    def many(f):
+    def select_many(f):
         def g(x, indices):
-            return Expression(x.get_head(), *pick(list(f(x)), indices))
+            expr = Expression(x.get_head(), *pick(list(f(x)), indices))
+
+            if assign_list is not None:
+                expr.original = None
+                expr.set_positions()
+
+            return expr
+
         return g
 
-    def one(f):
+    def select_one(f):
         def g(x, indices):
             return pick(list(f(x)), indices)[0]
+
         return g
 
     def pick(items, indices):
@@ -359,11 +370,11 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
         rest_indices = indices[1:]
 
         if index.has_form('Span', None):
-            select = many(span(index))
+            select = select_many(span(index))
         elif index.has_form('List', None):
-            select = many(sequence(index.leaves))
+            select = select_many(sequence(index.leaves))
         elif isinstance(index, Integer):
-            select = one(sequence(index))
+            select = select_one(sequence(index))
         else:
             raise MessageException('Part', 'pspec', index)
 
@@ -372,21 +383,26 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
 
         return [select(item, rest_indices) for item in items]
 
+    walk_list = list_of_list[0]
+
+    if assign_list is not None:
+        # this double copying is needed to make the current logic in
+        # the assign_list and its access to original work.
+
+        walk_list = walk_list.copy()
+        walk_list.set_positions()
+        list_of_list = [walk_list]
+
+        walk_list = walk_list.copy()
+        walk_list.set_positions()
+
     try:
-        result = list(pick(list_of_list, indices))[0]
+        result = list(pick([walk_list], indices))[0]
     except MessageException as e:
         e.message(evaluation)
         return False
 
     if assign_list is not None:
-        walk_list = list_of_list[0]
-
-        # To get rid of duplicate entries (TODO: could be made faster!)
-        walk_list = walk_list.copy()
-
-        walk_list.set_positions()
-        list_of_list = [walk_list]
-
         def replace_item(all, item, new):
             if item.position is None:
                 all[0] = new
@@ -407,9 +423,10 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
                 for sub_item, sub_assignment in zip(item.leaves,
                                                     assignment.leaves):
                     process_level(sub_item, sub_assignment)
-        process_level(result, assign_list)
-        result = list_of_list[0]
 
+        process_level(result, assign_list)
+
+        result = list_of_list[0]
         result.last_evaluated = None
 
     return result
