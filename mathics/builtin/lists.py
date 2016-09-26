@@ -284,106 +284,145 @@ def set_part(list, indices, new):
     rec(list, indices)
 
 
-def walk_parts(list_of_list, indices, evaluation, assign_list=None):
-    def span(index):
-        if len(index.leaves) > 3:
-            raise MessageException('Part', 'span', index)
-        start = 1
-        stop = None
-        step = 1
-        if len(index.leaves) > 0:
-            start = index.leaves[0].get_int_value()
-        if len(index.leaves) > 1:
-            stop = index.leaves[1].get_int_value()
-            if stop is None:
-                if index.leaves[1].get_name() == 'System`All':
-                    stop = None
-                else:
-                    raise MessageException('Part', 'span', index)
-        if len(index.leaves) > 2:
-            step = index.leaves[2].get_int_value()
+def _parts_span_selector(pspec):
+    if len(pspec.leaves) > 3:
+        raise MessageException('Part', 'span', pspec)
+    start = 1
+    stop = None
+    step = 1
+    if len(pspec.leaves) > 0:
+        start = pspec.leaves[0].get_int_value()
+    if len(pspec.leaves) > 1:
+        stop = pspec.leaves[1].get_int_value()
+        if stop is None:
+            if pspec.leaves[1].get_name() == 'System`All':
+                stop = None
+            else:
+                raise MessageException('Part', 'span', pspec)
+    if len(pspec.leaves) > 2:
+        step = pspec.leaves[2].get_int_value()
 
-        if start == 0 or stop == 0:
-            # index 0 is undefined
-            raise MessageException('Part', 'span', 0)
+    if start == 0 or stop == 0:
+        # index 0 is undefined
+        raise MessageException('Part', 'span', 0)
 
-        if start is None or step is None:
-            raise MessageException('Part', 'span', index)
+    if start is None or step is None:
+        raise MessageException('Part', 'span', pspec)
 
-        def select(inner):
-            py_slice = python_seq(start, stop, step, len(inner.leaves))
-            if py_slice is None:
-                raise MessageException('Part', 'take', start, stop, inner)
-            return inner.leaves[py_slice]
+    def select(inner):
+        if inner.is_atom():
+            raise MessageException('Part', 'partd')
+        py_slice = python_seq(start, stop, step, len(inner.leaves))
+        if py_slice is None:
+            raise MessageException('Part', 'take', start, stop, inner)
+        return inner.leaves[py_slice]
 
-        return select
+    return select
 
-    def sequence(index):
-        if not isinstance(index, list):
-            index_list = [index]
-        else:
-            index_list = index
 
-        for index_item in index_list:
-            if not isinstance(index_item, Integer):
-                raise MessageException('Part', 'pspec', index)
+def _parts_sequence_selector(pspec):
+    if not isinstance(pspec, list):
+        indices = [pspec]
+    else:
+        indices = pspec
 
-        def select(inner):
-            for index_item in index_list:
-                int_index = index_item.value
+    for index in indices:
+        if not isinstance(index, Integer):
+            raise MessageException('Part', 'pspec', pspec)
 
-                if int_index == 0:
-                    yield inner.head
-                elif 1 <= int_index <= len(inner.leaves):
-                    yield inner.leaves[int_index - 1]
-                else:
-                    raise MessageException('Part', 'partw', index_item, inner)
+    def select(inner):
+        if inner.is_atom():
+            raise MessageException('Part', 'partd')
 
-        return select
+        leaves = inner.leaves
+        n = len(leaves)
 
-    def many(f):
-        def g(x, indices):
-            return Expression(x.get_head(), *pick(list(f(x)), indices))
-        return g
+        for index in indices:
+            int_index = index.value
 
-    def one(f):
-        def g(x, indices):
-            return pick(list(f(x))[0], indices)
-        return g
+            if int_index == 0:
+                yield inner.head
+            elif 1 <= int_index <= n:
+                yield leaves[int_index - 1]
+            elif -n <= int_index <= -1:
+                yield leaves[int_index]
+            else:
+                raise MessageException('Part', 'partw', index, inner)
 
-    def pick(items, indices):
-        if not indices:
-            return items
+    return select
 
-        index = indices[0].evaluate(evaluation)
-        rest_indices = indices[1:]
 
+def _part_selectors(indices):
+    for index in indices:
         if index.has_form('Span', None):
-            select = many(span(index))
+            yield _parts_span_selector(index)
         elif index.has_form('List', None):
-            select = many(sequence(index.leaves))
+            yield _parts_sequence_selector(index.leaves)
         elif isinstance(index, Integer):
-            select = one(sequence(index))
+            yield _parts_sequence_selector(index), lambda x: x[0]
         else:
             raise MessageException('Part', 'pspec', index)
 
-        return [select(item, rest_indices) for item in items]
+
+def _list_parts(items, selectors, assignment):
+    if not selectors:
+        for item in items:
+            yield item
+    else:
+        selector = selectors[0]
+        if isinstance(selector, tuple):
+            select, unwrap = selector
+        else:
+            select = selector
+            unwrap = None
+
+        for item in items:
+            selected = list(select(item))
+
+            picked = list(_list_parts(
+                selected, selectors[1:], assignment))
+
+            if unwrap is None:
+                expr = item.shallow_copy()
+                expr.leaves = picked
+
+                if assignment:
+                    expr.original = None
+                    expr.set_positions()
+
+                yield expr
+            else:
+                yield unwrap(picked)
+
+
+def _parts(items, selectors, assignment=False):
+    return list(_list_parts([items], list(selectors), assignment))[0]
+
+
+def walk_parts(list_of_list, indices, evaluation, assign_list=None):
+    walk_list = list_of_list[0]
+
+    if assign_list is not None:
+        # this double copying is needed to make the current logic in
+        # the assign_list and its access to original work.
+
+        walk_list = walk_list.copy()
+        walk_list.set_positions()
+        list_of_list = [walk_list]
+
+        walk_list = walk_list.copy()
+        walk_list.set_positions()
 
     try:
-        result = list(pick(list_of_list, indices))[0]
+        result = _parts(
+            walk_list,
+            _part_selectors(indices),
+            assign_list is not None)
     except MessageException as e:
         e.message(evaluation)
         return False
 
     if assign_list is not None:
-        walk_list = list_of_list[0]
-
-        # To get rid of duplicate entries (TODO: could be made faster!)
-        walk_list = walk_list.copy()
-
-        walk_list.set_positions()
-        list_of_list = [walk_list]
-
         def replace_item(all, item, new):
             if item.position is None:
                 all[0] = new
@@ -404,10 +443,12 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
                 for sub_item, sub_assignment in zip(item.leaves,
                                                     assignment.leaves):
                     process_level(sub_item, sub_assignment)
-        process_level(result, assign_list)
-        result = list_of_list[0]
 
-    result.last_evaluated = None
+        process_level(result, assign_list)
+
+        result = list_of_list[0]
+        result.last_evaluated = None
+
     return result
 
 
@@ -1062,6 +1103,39 @@ class ReplacePart(Builtin):
         return new_expr
 
 
+def _drop_take_selector(name, seq, sliced):
+    seq_tuple = convert_seq(seq)
+    if seq_tuple is None:
+        raise MessageException(name, 'seqs', seq)
+
+    def select(inner):
+        start, stop, step = seq_tuple
+        if inner.is_atom():
+            py_slice = None
+        else:
+            py_slice = python_seq(start, stop, step, len(inner.leaves))
+        if py_slice is None:
+            if stop is None:
+                stop = Symbol('Infinity')
+            raise MessageException(name, name.lower(), start, stop, inner)
+        return sliced(inner.leaves, py_slice)
+
+    return select
+
+
+def _take_span_selector(seq):
+    return _drop_take_selector('Take', seq, lambda x, s: x[s])
+
+
+def _drop_span_selector(seq):
+    def sliced(x, s):
+        y = x[:]
+        del y[s]
+        return y
+
+    return _drop_take_selector('Drop', seq, sliced)
+
+
 class Take(Builtin):
     """
     <dl>
@@ -1118,35 +1192,19 @@ class Take(Builtin):
         'normal': 'Nonatomic expression expected at position `1` in `2`.',
     }
 
-    def apply(self, list, seqs, evaluation):
-        'Take[list_, seqs___]'
+    def apply(self, items, seqs, evaluation):
+        'Take[items_, seqs___]'
 
-        expr = Expression('Take', list, seqs)
         seqs = seqs.get_sequence()
 
-        list = list.copy()
-        inner_list = [list]
+        if items.is_atom():
+            return evaluation.message(
+                'Take', 'normal', 1, Expression('Take', items, *seqs))
 
-        for inner in inner_list:
-            if inner.is_atom():
-                return evaluation.message('Take', 'normal', 1, expr)
-
-        for seq in seqs:
-            seq_tuple = convert_seq(seq)
-            if seq_tuple is None:
-                evaluation.message('Take', 'seqs', seq)
-                return
-            start, stop, step = seq_tuple
-            for inner in inner_list:
-                py_slice = python_seq(start, stop, step, len(inner.leaves))
-                if py_slice is None:
-                    if stop is None:
-                        stop = Symbol('Infinity')
-                    return evaluation.message('Take', 'take', start, stop, inner)
-                inner.leaves = inner.leaves[py_slice]
-            inner_list = join_lists(inner.leaves for inner in inner_list)
-
-        return list
+        try:
+            return _parts(items, [_take_span_selector(seq) for seq in seqs])
+        except MessageException as e:
+            e.message(evaluation)
 
 
 class Drop(Builtin):
@@ -1180,31 +1238,23 @@ class Drop(Builtin):
     """
 
     messages = {
+        'normal': 'Nonatomic expression expected at position `1` in `2`.',
         'drop': "Cannot drop positions `1` through `2` in `3`.",
     }
 
-    def apply(self, list, seqs, evaluation):
-        'Drop[list_, seqs___]'
+    def apply(self, items, seqs, evaluation):
+        'Drop[items_, seqs___]'
 
         seqs = seqs.get_sequence()
 
-        list = list.copy()
-        inner_list = [list]
+        if items.is_atom():
+            return evaluation.message(
+                'Drop', 'normal', 1, Expression('Drop', items, *seqs))
 
-        for seq in seqs:
-            seq_tuple = convert_seq(seq)
-            if seq_tuple is None:
-                evaluation.message('Drop', 'seqs', seq)
-                return
-            start, stop, step = seq_tuple
-            for inner in inner_list:
-                py_slice = python_seq(start, stop, step, len(inner.leaves))
-                if inner.is_atom() or py_slice is None:
-                    return evaluation.message('Drop', 'drop', start, stop, inner)
-                del inner.leaves[py_slice]
-            inner_list = join_lists(inner.leaves for inner in inner_list)
-
-        return list
+        try:
+            return _parts(items, [_drop_span_selector(seq) for seq in seqs])
+        except MessageException as e:
+            e.message(evaluation)
 
 
 class Select(Builtin):
