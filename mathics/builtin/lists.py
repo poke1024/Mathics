@@ -331,35 +331,24 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
         def select(inner):
             for index_item in index_list:
                 int_index = index_item.value
-                n = len(inner.leaves)
 
                 if int_index == 0:
                     yield inner.head
-                elif 1 <= int_index <= n:
+                elif 1 <= int_index <= len(inner.leaves):
                     yield inner.leaves[int_index - 1]
-                elif -n <= int_index <= -1:
-                    yield inner.leaves[int_index]
                 else:
                     raise MessageException('Part', 'partw', index_item, inner)
 
         return select
 
-    def select_many(f):
+    def many(f):
         def g(x, indices):
-            expr = Expression(x.get_head(), *pick(list(f(x)), indices))
-
-            if assign_list is not None:
-                expr.original = None
-                expr.set_positions()
-
-            return expr
-
+            return Expression(x.get_head(), *pick(list(f(x)), indices))
         return g
 
-    def select_one(f):
+    def one(f):
         def g(x, indices):
-            return pick(list(f(x)), indices)[0]
-
+            return pick(list(f(x))[0], indices)
         return g
 
     def pick(items, indices):
@@ -370,39 +359,31 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
         rest_indices = indices[1:]
 
         if index.has_form('Span', None):
-            select = select_many(span(index))
+            select = many(span(index))
         elif index.has_form('List', None):
-            select = select_many(sequence(index.leaves))
+            select = many(sequence(index.leaves))
         elif isinstance(index, Integer):
-            select = select_one(sequence(index))
+            select = one(sequence(index))
         else:
             raise MessageException('Part', 'pspec', index)
 
-        if any(item.is_atom() for item in items):
-            raise MessageException('Part', 'partd')
-
         return [select(item, rest_indices) for item in items]
 
-    walk_list = list_of_list[0]
-
-    if assign_list is not None:
-        # this double copying is needed to make the current logic in
-        # the assign_list and its access to original work.
-
-        walk_list = walk_list.copy()
-        walk_list.set_positions()
-        list_of_list = [walk_list]
-
-        walk_list = walk_list.copy()
-        walk_list.set_positions()
-
     try:
-        result = list(pick([walk_list], indices))[0]
+        result = list(pick(list_of_list, indices))[0]
     except MessageException as e:
         e.message(evaluation)
         return False
 
     if assign_list is not None:
+        walk_list = list_of_list[0]
+
+        # To get rid of duplicate entries (TODO: could be made faster!)
+        walk_list = walk_list.copy()
+
+        walk_list.set_positions()
+        list_of_list = [walk_list]
+
         def replace_item(all, item, new):
             if item.position is None:
                 all[0] = new
@@ -423,12 +404,10 @@ def walk_parts(list_of_list, indices, evaluation, assign_list=None):
                 for sub_item, sub_assignment in zip(item.leaves,
                                                     assignment.leaves):
                     process_level(sub_item, sub_assignment)
-
         process_level(result, assign_list)
-
         result = list_of_list[0]
-        result.last_evaluated = None
 
+    result.last_evaluated = None
     return result
 
 
@@ -3492,7 +3471,7 @@ class Quantile(Builtin):
     """
 
     rules = {
-        'Quantile[list_List, q_List, x___]': 'Quantile[list, #, x]& /@ q',
+        'Quantile[list_List, q_, abcd_]': 'Quantile[list, {q}, abcd]',
         'Quantile[list_List, q_]': 'Quantile[list, q, {{0, 1}, {1, 0}}]',
     }
 
@@ -3500,40 +3479,57 @@ class Quantile(Builtin):
         'nquan': 'The quantile `1` has to be between 0 and 1.',
     }
 
-    def apply(self, l, q, a, b, c, d, evaluation):
-        '''Quantile[l_List, q_, {{a_, b_}, {c_, d_}}]'''
-
-        py_q = q.evaluate(evaluation).numerify(evaluation).to_mpmath()
-        if py_q is None or not 0. <= py_q <= 1.:
-            evaluation.message('Quantile', 'nquan', q)
-            return
+    def apply(self, l, qs, a, b, c, d, evaluation):
+        '''Quantile[l_List, qs_List, {{a_, b_}, {c_, d_}}]'''
 
         n = len(l.leaves)
-
-        x = Expression('Plus', a, Expression(
-            'Times', Expression('Plus', Integer(n), b), q))
+        partially_sorted = l.leaves[:]
 
         def ranked(i):
-            return introselect(l.leaves[:], min(max(0, i - 1), n - 1))
+            return introselect(partially_sorted, min(max(0, i - 1), n - 1))
 
-        numeric_x = x.evaluate(evaluation).numerify(evaluation)
+        numeric_qs = qs.evaluate(evaluation).numerify(evaluation)
+        results = []
 
-        if isinstance(numeric_x, Integer):
-            return ranked(numeric_x.get_int_value())
-        else:
-            py_x = numeric_x.to_mpmath()
+        for q in numeric_qs.leaves:
+            py_q = q.to_mpmath()
 
-            if py_x is None:
+            if py_q is None or not 0. <= py_q <= 1.:
+                evaluation.message('Quantile', 'nquan', q)
                 return
 
-            from mpmath import floor as mpfloor, ceil as mpceil
-            py_floor_x = mpfloor(py_x)
+            x = Expression('Plus', a, Expression(
+                'Times', Expression('Plus', Integer(n), b), q))
 
-            s0 = ranked(int(py_floor_x))
-            s1 = ranked(int(mpceil(py_x)))
+            numeric_x = x.evaluate(evaluation).numerify(evaluation)
 
-            k = Expression('Plus', c, Expression('Times', d, Expression('Subtract', x, Expression('Floor', x))))
-            return Expression('Plus', s0, Expression('Times', k, Expression('Subtract', s1, s0)))
+            if isinstance(numeric_x, Integer):
+                results.append(ranked(numeric_x.get_int_value()))
+            else:
+                py_x = numeric_x.to_mpmath()
+
+                if py_x is None:
+                    return
+
+                from mpmath import floor as mpfloor, ceil as mpceil
+
+                if c.get_int_value() == 1 and d.get_int_value() == 0:  # k == 1?
+                    results.append(ranked(int(mpceil(py_x))))
+                else:
+                    py_floor_x = mpfloor(py_x)
+                    s0 = ranked(int(py_floor_x))
+                    s1 = ranked(int(mpceil(py_x)))
+
+                    k = Expression('Plus', c, Expression(
+                        'Times', d, Expression('Subtract', x, Expression('Floor', x))))
+
+                    results.append(Expression('Plus', s0, Expression(
+                        'Times', k, Expression('Subtract', s1, s0))))
+
+        if len(results) == 1:
+            return results[0]
+        else:
+            return Expression('List', *results)
 
 
 class Quartiles(Builtin):
@@ -4271,72 +4267,6 @@ class ClusteringComponents(_Cluster):
                              Expression('ClusteringComponents', p, k, *options_to_rules(options)))
 
 
-class Permutations(Builtin):
-    '''
-    <dl>
-    <dt>'Permutations[$list$]'
-        <dd>gives all possible orderings of the items in $list$.
-    <dt>'Permutations[$list$, $n$]'
-        <dd>gives permutations up to length $n$.
-    <dt>'Permutations[$list$, {$n$}]'
-        <dd>gives permutations of length $n$.
-    </dl>
-
-    >> Permutations[{y, 1, x}]
-     = {{y, 1, x}, {y, x, 1}, {1, y, x}, {1, x, y}, {x, y, 1}, {x, 1, y}}
-
-    Elements are differentiated by their position in $list$, not their value.
-
-    >> Permutations[{a, b, b}]
-     = {{a, b, b}, {a, b, b}, {b, a, b}, {b, b, a}, {b, a, b}, {b, b, a}}
-
-    >> Permutations[{1, 2, 3}, 2]
-     = {{}, {1}, {2}, {3}, {1, 2}, {1, 3}, {2, 1}, {2, 3}, {3, 1}, {3, 2}}
-
-    >> Permutations[{1, 2, 3}, {2}]
-     = {{1, 2}, {1, 3}, {2, 1}, {2, 3}, {3, 1}, {3, 2}}
-    '''
-
-    messages = {
-        'argt': 'Permutation expects at least one argument.',
-        'nninfseq': 'The number specified at position 2 of `` must be a non-negative integer, All, or Infinity.'
-    }
-
-    def apply_argt(self, evaluation):
-        'Permutations[]'
-        evaluation.message(self.get_name(), 'argt')
-
-    def apply(self, l, evaluation):
-        'Permutations[l_List]'
-        return Expression('List', *[Expression('List', *p)
-                                    for p in permutations(l.leaves, len(l.leaves))])
-
-    def apply_n(self, l, n, evaluation):
-        'Permutations[l_List, n_]'
-
-        rs = None
-        if isinstance(n, Integer):
-            py_n = min(n.get_int_value(), len(l.leaves))
-        elif n.has_form('List', 1) and isinstance(n.leaves[0], Integer):
-            py_n = n.leaves[0].get_int_value()
-            rs = (py_n,)
-        elif (n.has_form('DirectedInfinity', 1) and n.leaves[0].get_int_value() == 1) or n.get_name() == 'System`All':
-            py_n = len(l.leaves)
-        else:
-            py_n = None
-
-        if py_n is None or py_n < 0:
-            evaluation.message(self.get_name(), 'nninfseq', Expression(self.get_name(), l, n))
-            return
-
-        if rs is None:
-            rs = range(py_n + 1)
-
-        return Expression('List', *[Expression('List', *p)
-                                    for r in rs
-                                    for p in permutations(l.leaves, r)])
-
-
 class Nearest(Builtin):
     '''
     <dl>
@@ -4462,3 +4392,69 @@ class Nearest(Builtin):
             return Symbol('$Failed')
         except ValueError:
             return Symbol('$Failed')
+
+
+class Permutations(Builtin):
+    '''
+    <dl>
+    <dt>'Permutations[$list$]'
+        <dd>gives all possible orderings of the items in $list$.
+    <dt>'Permutations[$list$, $n$]'
+        <dd>gives permutations up to length $n$.
+    <dt>'Permutations[$list$, {$n$}]'
+        <dd>gives permutations of length $n$.
+    </dl>
+
+    >> Permutations[{y, 1, x}]
+     = {{y, 1, x}, {y, x, 1}, {1, y, x}, {1, x, y}, {x, y, 1}, {x, 1, y}}
+
+    Elements are differentiated by their position in $list$, not their value.
+
+    >> Permutations[{a, b, b}]
+     = {{a, b, b}, {a, b, b}, {b, a, b}, {b, b, a}, {b, a, b}, {b, b, a}}
+
+    >> Permutations[{1, 2, 3}, 2]
+     = {{}, {1}, {2}, {3}, {1, 2}, {1, 3}, {2, 1}, {2, 3}, {3, 1}, {3, 2}}
+
+    >> Permutations[{1, 2, 3}, {2}]
+     = {{1, 2}, {1, 3}, {2, 1}, {2, 3}, {3, 1}, {3, 2}}
+    '''
+
+    messages = {
+        'argt': 'Permutation expects at least one argument.',
+        'nninfseq': 'The number specified at position 2 of `` must be a non-negative integer, All, or Infinity.'
+    }
+
+    def apply_argt(self, evaluation):
+        'Permutations[]'
+        evaluation.message(self.get_name(), 'argt')
+
+    def apply(self, l, evaluation):
+        'Permutations[l_List]'
+        return Expression('List', *[Expression('List', *p)
+                                    for p in permutations(l.leaves, len(l.leaves))])
+
+    def apply_n(self, l, n, evaluation):
+        'Permutations[l_List, n_]'
+
+        rs = None
+        if isinstance(n, Integer):
+            py_n = min(n.get_int_value(), len(l.leaves))
+        elif n.has_form('List', 1) and isinstance(n.leaves[0], Integer):
+            py_n = n.leaves[0].get_int_value()
+            rs = (py_n,)
+        elif (n.has_form('DirectedInfinity', 1) and n.leaves[0].get_int_value() == 1) or n.get_name() == 'System`All':
+            py_n = len(l.leaves)
+        else:
+            py_n = None
+
+        if py_n is None or py_n < 0:
+            evaluation.message(self.get_name(), 'nninfseq', Expression(self.get_name(), l, n))
+            return
+
+        if rs is None:
+            rs = range(py_n + 1)
+
+        return Expression('List', *[Expression('List', *p)
+                                    for r in rs
+                                    for p in permutations(l.leaves, r)])
