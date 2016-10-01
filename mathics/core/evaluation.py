@@ -13,7 +13,7 @@ import sys
 from threading import Thread
 
 from mathics import settings
-from mathics.core.expression import ensure_context, KeyComparable
+from mathics.core.expression import ensure_context, KeyComparable, make_boxes_strategy, Omissions
 
 FORMATS = ['StandardForm', 'FullForm', 'TraditionalForm',
            'OutputForm', 'InputForm',
@@ -177,6 +177,7 @@ class Evaluation(object):
 
         self.quiet_all = False
         self.format = format
+        self.boxes_strategy = make_boxes_strategy(None, None, self)
         self.catch_interrupt = catch_interrupt
 
     def parse(self, query):
@@ -324,23 +325,42 @@ class Evaluation(object):
 
         from mathics.core.expression import Expression, BoxError
 
-        if format == 'text':
-            result = expr.format(self, 'System`OutputForm')
-        elif format == 'xml':
-            result = Expression(
-                'StandardForm', expr).format(self, 'System`MathMLForm')
-        elif format == 'tex':
-            result = Expression('StandardForm', expr).format(
-                self, 'System`TeXForm')
-        else:
-            raise ValueError
-
+        old_boxes_strategy = self.boxes_strategy
         try:
-            boxes = result.boxes_to_text(evaluation=self)
-        except BoxError:
-            self.message('General', 'notboxes',
-                         Expression('FullForm', result).evaluate(self))
-            boxes = None
+            capacity = self.definitions.get_config_value('System`$OutputSizeLimit')
+            omissions = Omissions()
+            self.boxes_strategy = make_boxes_strategy(capacity, omissions, self)
+
+            options = {}
+
+            if format == 'text':
+                result = expr.format(self, 'System`OutputForm')
+                # for MathMLForm and TexForm, output size limits are applied in the form's apply
+                # methods (e.g. see MathMLForm.apply) and then passed through result.boxes_to_text
+                # which must, in these cases, not apply additional clipping, as this would clip
+                # already clipped string material. for OutputForm, on the other hand, the call to
+                # result.boxes_to_text is the only place we have to apply output size limits.
+                options['output_size_limit'] = capacity
+            elif format == 'xml':
+                result = Expression(
+                    'StandardForm', expr).format(self, 'System`MathMLForm')
+            elif format == 'tex':
+                result = Expression('StandardForm', expr).format(
+                    self, 'System`TeXForm')
+            else:
+                raise ValueError
+
+            try:
+                boxes = result.boxes_to_text(evaluation=self, **options)
+            except BoxError:
+                self.message('General', 'notboxes',
+                             Expression('FullForm', result).evaluate(self))
+                boxes = None
+
+            omissions.warn(self)
+        finally:
+            self.boxes_strategy = old_boxes_strategy
+
         return boxes
 
     def set_quiet_messages(self, messages):
