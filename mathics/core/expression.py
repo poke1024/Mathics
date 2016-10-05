@@ -539,6 +539,12 @@ class _Window:
         return [x - start for x in integers[lower_index:upper_index]]
 
 
+def fast_expression(head, leaves):
+    expr = Expression(head)
+    expr.leaves = leaves
+    return expr
+
+
 class Expression(BaseExpression):
     def __new__(cls, head, *leaves):
         self = super(Expression, cls).__new__(cls)
@@ -575,8 +581,7 @@ class Expression(BaseExpression):
             a = bisect_left(seq, i)  # all(val >= i for val in seq[a:])
             b = bisect_left(seq, j)  # all(val >= j for val in seq[b:])
 
-            expr = Expression(head)
-            expr.leaves = chunk  # (O1)
+            expr = fast_expression(head, chunk)  # (O1)
             expr.seq = [x - i for x in seq[a:b]]  # (O2)
             expr.last_evaluated = self.last_evaluated  # (O3)
 
@@ -2601,3 +2606,15 @@ def make_boxes_strategy(capacity, evaluation):
     else:
         return _LimitedMakeBoxesStrategy(capacity, evaluation)
 
+
+_list_head = Symbol('List')
+
+
+def fast_list(leaves):
+    return fast_expression(_list_head, leaves)
+
+
+def fast_atom_list(leaves):
+    expr = fast_list(leaves)
+    expr.seq = []
+    return expr

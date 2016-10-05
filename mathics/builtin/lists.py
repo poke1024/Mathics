@@ -18,7 +18,7 @@ from mathics.builtin.base import (
 from mathics.builtin.scoping import dynamic_scoping
 from mathics.builtin.base import MessageException, NegativeIntegerException, CountableInteger
 from mathics.core.expression import Expression, String, Symbol, Integer, Number, Real, strip_context, from_python
-from mathics.core.expression import min_prec, machine_precision
+from mathics.core.expression import min_prec, machine_precision, fast_expression, fast_atom_list
 from mathics.core.evaluation import BreakInterrupt, ContinueInterrupt, ReturnInterrupt
 from mathics.core.rules import Pattern
 from mathics.core.convert import from_sympy
@@ -483,7 +483,7 @@ def walk_levels(expr, start=1, stop=None, current=0, heads=False,
             if leaf_depth + 1 > depth:
                 depth = leaf_depth + 1
             leaves.append(leaf)
-        new_expr = Expression(head, *leaves)
+        new_expr = fast_expression(head, leaves)
     if is_in_level(current, depth, start, stop):
         if include_pos:
             new_expr = callback(new_expr, cur_pos)
@@ -1644,12 +1644,12 @@ class Position(Builtin):
 
         def callback(level, pos):
             if match(level, evaluation):
-                result.append(pos)
+                result.append(fast_atom_list([Integer(x) for x in pos]))
             return level
 
         heads = self.get_option(options, 'Heads', evaluation).is_true()
         walk_levels(expr, start, stop, heads=heads, callback=callback, include_pos=True)
-        return from_python(result)
+        return fast_atom_list(result)
 
 
 class MemberQ(Builtin):
