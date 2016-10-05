@@ -514,6 +514,31 @@ def _sequences(leaves):
             yield i
 
 
+class _Window:
+    def __init__(self, integers):  # items: an ordered sequence of integers
+        self.integers = integers
+        self.index = 0
+
+    def advance(self, start, end):
+        integers = self.integers
+        n_integers = len(integers)
+        lower_index = self.index
+
+        # smallest i such that items[i] >= start and the smallest j such that items[j] >= end
+
+        # assert start >= last_start
+
+        while lower_index < n_integers and integers[lower_index] < start:
+            lower_index += 1
+        self.index = lower_index
+
+        upper_index = lower_index
+        while upper_index < n_integers and integers[upper_index] < end:
+            upper_index += 1
+
+        return [x - start for x in integers[lower_index:upper_index]]
+
+
 class Expression(BaseExpression):
     def __new__(cls, head, *leaves):
         self = super(Expression, cls).__new__(cls)
@@ -525,6 +550,37 @@ class Expression(BaseExpression):
         self.sym = None
         self._cache = None
         return self
+
+    def partition(self, n, d):
+        assert n > 0 and d > 0
+
+        # a fast partition that relies on three optimizations:
+        # (O1) leaves are not checked via from_python
+        # (O2) sequences are derived from those detected in self
+        # (O3) if self has been evaluated, there's no need to evaluate
+        # any partition of self.
+
+        leaves = self.leaves
+        head = Symbol('List')
+        seq = self.sequences()
+
+        from bisect import bisect_left
+
+        for i in range(0, len(leaves), d):
+            j = i + n
+            chunk = leaves[i:j]
+            if len(chunk) != n:
+                continue
+
+            a = bisect_left(seq, i)  # all(val >= i for val in seq[a:])
+            b = bisect_left(seq, j)  # all(val >= j for val in seq[b:])
+
+            expr = Expression(head)
+            expr.leaves = chunk  # (O1)
+            expr.seq = [x - i for x in seq[a:b]]  # (O2)
+            expr.last_evaluated = self.last_evaluated  # (O3)
+
+            yield expr
 
     def _cached(self, evaluation, key, f):
         cache = self._cache
