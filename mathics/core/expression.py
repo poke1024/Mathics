@@ -1528,6 +1528,13 @@ class Symbol(Atom):
         return (self.name, self.sympy_dummy)
 
 
+_integer_head = Symbol('Integer')
+_rational_head = Symbol('Rational')
+_real_head = Symbol('Real')
+_complex_head = Symbol('Complex')
+_string_head = Symbol('String')
+
+
 class Number(Atom):
     def __str__(self):
         return str(self.value)
@@ -1583,12 +1590,16 @@ _number_form_options = {
     'NumberMultiplier': '\u00d7',
 }
 
+
 class Integer(Number):
     def __new__(cls, value):
         n = int(value)
         self = super(Integer, cls).__new__(cls)
         self.value = n
         return self
+
+    def get_head(self):
+        return _integer_head
 
     def boxes_to_text(self, **options):
         return str(self.value)
@@ -1664,6 +1675,9 @@ class Rational(Number):
         self = super(Rational, cls).__new__(cls)
         self.value = sympy.Rational(numerator, denominator)
         return self
+
+    def get_head(self):
+        return _rational_head
 
     def atom_to_boxes(self, f, evaluation):
         return self.format(evaluation, f.get_name())
@@ -1817,6 +1831,9 @@ class Real(Number):
         _prec = self.get_precision()
         update(b'System`Real>' + str(self.to_sympy().n(dps(_prec))).encode('utf8'))
 
+    def get_head(self):
+        return _real_head
+
     def get_atom_name(self):
         return 'Real'
 
@@ -1963,6 +1980,9 @@ class Complex(Number):
         self.real = real
         self.imag = imag
         return self
+
+    def get_head(self):
+        return _complex_head
 
     def atom_to_boxes(self, f, evaluation):
         return self.format(evaluation, f.get_name())
@@ -2122,6 +2142,9 @@ class String(Atom):
         self = super(String, cls).__new__(cls)
         self.value = six.text_type(value)
         return self
+
+    def get_head(self):
+        return _string_head
 
     def __str__(self):
         return '"%s"' % self.value
