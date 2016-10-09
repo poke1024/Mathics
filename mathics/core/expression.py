@@ -710,7 +710,6 @@ class Expression(BaseExpression):
         expr.sym = self.sym
         expr.options = self.options
         expr.last_evaluated = self.last_evaluated
-        expr._cache = self._cache
         return expr
 
     def set_positions(self, position=None):
