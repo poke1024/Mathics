@@ -1171,7 +1171,7 @@ class DictionaryLookup(_WordListBuiltin):
     """
 
     def compile(self, pattern, evaluation):
-        re_patt = to_regex(pattern)
+        re_patt = to_regex(pattern, evaluation)
         if re_patt is None:
             evaluation.message('StringExpression', 'invld', pattern, Expression('StringExpression', pattern))
             return
