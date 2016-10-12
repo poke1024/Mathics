@@ -600,7 +600,7 @@ class Expression(BaseExpression):
             k = i + 1
         extend(leaves[k:])
 
-        return Expression(self.head, *flattened)
+        return self.restructure(self.head, flattened)
 
     def flatten_sequence(self):
         def sequence(leaf):
@@ -1005,7 +1005,8 @@ class Expression(BaseExpression):
                 eval_range(range(len(leaves)))
                 # rest_range(range(0, 0))
 
-            new = Expression(head, *leaves)
+            new = Expression(head)
+            new._leaves = leaves
 
             if ('System`SequenceHold' not in attributes and    # noqa
                 'System`HoldAllComplete' not in attributes):
@@ -1086,7 +1087,8 @@ class Expression(BaseExpression):
                     dirty_leaves[index] = Expression('Unevaluated', leaf)
 
             if dirty_leaves:
-                new = Expression(head, *dirty_leaves)
+                new = Expression(head)
+                new._leaves = dirty_leaves
 
             new.unformatted = self.unformatted
             new.update_token(evaluation)
