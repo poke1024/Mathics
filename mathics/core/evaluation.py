@@ -429,7 +429,7 @@ class Evaluation(object):
         return self.boxes_strategy.make(
             prefix, make_leaf, n_leaves, left, right, sep, materialize, form)
 
-    def message(self, symbol, tag, *args):
+    def message(self, symbol, tag, *args, **kwargs):
         from mathics.core.expression import (String, Symbol, Expression,
                                              from_python)
 
