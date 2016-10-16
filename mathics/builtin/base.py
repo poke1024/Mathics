@@ -190,13 +190,25 @@ class Builtin(object):
                 else:
                     yield (pattern, function)
 
-    def get_option(self, options, name, evaluation, pop=False):
-        name = ensure_context(name)
-        value = options.pop(name, None) if pop else options.get(name)
-        if value is not None:
-            return value.evaluate(evaluation)
-        else:
-            return None
+    @staticmethod
+    def get_option(options, name, evaluation, pop=False):
+        # we do not care, whether an option X is given as
+        # System`X, Global`X, or "X". we always handle it
+        # as the same option. this matches Wolfram Language
+        # behaviour.
+
+        for variant in ('System`%s', 'Global`%s', '"%s"'):
+            resolved_name = variant % name
+
+            if pop:
+                value = options.pop(resolved_name, None)
+            else:
+                value = options.get(resolved_name)
+
+            if value is not None:
+                return value.evaluate(evaluation)
+
+        return None
 
     def _get_unavailable_function(self):
         requires = getattr(self, 'requires', [])
