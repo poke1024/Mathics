@@ -1078,7 +1078,7 @@ class Expression(BaseExpression):
     def evaluate_next(self, evaluation):
         head = self.head.evaluate(evaluation)
         attributes = head.get_attributes(evaluation.definitions)
-        leaves = self.leaves[:]
+        leaves = self.get_mutable_leaves()
 
         def rest_range(indices):
             if 'System`HoldAllComplete' not in attributes:
@@ -1106,13 +1106,13 @@ class Expression(BaseExpression):
             eval_range(range(len(leaves)))
             # rest_range(range(0, 0))
 
-            new = Expression(head)
-            new._leaves = tuple(leaves)
+        new = Expression(head)
+        new._leaves = tuple(leaves)
 
-            if ('System`SequenceHold' not in attributes and    # noqa
-                'System`HoldAllComplete' not in attributes):
-                new = new.flatten_sequence(evaluation)
-                leaves = new._leaves
+        if ('System`SequenceHold' not in attributes and    # noqa
+            'System`HoldAllComplete' not in attributes):
+            new = new.flatten_sequence(evaluation)
+            leaves = new._leaves
 
         for leaf in leaves:
             leaf.unevaluated = False
@@ -1136,21 +1136,21 @@ class Expression(BaseExpression):
             for leaf in new_leaves:
                 leaf.unevaluated = old.unevaluated
 
-            if 'System`Flat' in attributes:
-                new = new.flatten(new._head, callback=flatten_callback)
-            if 'System`Orderless' in attributes:
-                new.sort()
+        if 'System`Flat' in attributes:
+            new = new.flatten(new._head, callback=flatten_callback)
+        if 'System`Orderless' in attributes:
+            new.sort()
 
-            new._timestamp_cache(evaluation)
+        new._timestamp_cache(evaluation)
 
-            if 'System`Listable' in attributes:
-                done, threaded = new.thread(evaluation)
-                if done:
-                    if threaded.same(new):
-                        new._timestamp_cache(evaluation)
-                        return new, False
-                    else:
-                        return threaded, True
+        if 'System`Listable' in attributes:
+            done, threaded = new.thread(evaluation)
+            if done:
+                if threaded.same(new):
+                    new._timestamp_cache(evaluation)
+                    return new, False
+                else:
+                    return threaded, True
 
         def rules():
             rules_names = set()
@@ -1170,31 +1170,31 @@ class Expression(BaseExpression):
                 for rule in evaluation.definitions.get_subvalues(lookup_name):
                     yield rule
 
-            for rule in rules():
-                result = rule.apply(new, evaluation, fully=False)
-                if result is not None:
-                    if result.same(new):
-                        new._timestamp_cache(evaluation)
-                        return new, False
-                    else:
-                        return result, True
+        for rule in rules():
+            result = rule.apply(new, evaluation, fully=False)
+            if result is not None:
+                if result.same(new):
+                    new._timestamp_cache(evaluation)
+                    return new, False
+                else:
+                    return result, True
 
-            dirty_leaves = None
+        dirty_leaves = None
 
-            # Expression did not change, re-apply Unevaluated
-            for index, leaf in enumerate(new._leaves):
-                if leaf.unevaluated:
-                    if dirty_leaves is None:
-                        dirty_leaves = list(new._leaves)
-                    dirty_leaves[index] = Expression('Unevaluated', leaf)
+        # Expression did not change, re-apply Unevaluated
+        for index, leaf in enumerate(new._leaves):
+            if leaf.unevaluated:
+                if dirty_leaves is None:
+                    dirty_leaves = list(new._leaves)
+                dirty_leaves[index] = Expression('Unevaluated', leaf)
 
-            if dirty_leaves:
-                new = Expression(head)
-                new._leaves = tuple(dirty_leaves)
+        if dirty_leaves:
+            new = Expression(head)
+            new._leaves = tuple(dirty_leaves)
 
-            new.unformatted = self.unformatted
-            new._timestamp_cache(evaluation)
-            return new, False
+        new.unformatted = self.unformatted
+        new._timestamp_cache(evaluation)
+        return new, False
 
     def evaluate_leaves(self, evaluation):
         leaves = [leaf.evaluate(evaluation) for leaf in self._leaves]
