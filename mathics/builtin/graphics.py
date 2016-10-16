@@ -17,12 +17,12 @@ from six.moves import map
 from six.moves import range
 from six.moves import zip
 from itertools import chain
-from math import sin, cos, pi
 from sympy.matrices import Matrix
 
 from mathics.builtin.base import (
     Builtin, InstancableBuiltin, BoxConstruct, BoxConstructError)
 from mathics.builtin.options import options_to_rules
+from mathics.layout.client import WebEngineUnavailable
 from mathics.core.expression import (
     Expression, Integer, Rational, Real, String, Symbol, strip_context,
     system_symbols, system_symbols_dict, from_python)
@@ -418,7 +418,7 @@ class Graphics(Builtin):
 
     In 'TeXForm', 'Graphics' produces Asymptote figures:
     >> Graphics[Circle[]] // TeXForm
-     = 
+     =
      . \begin{asy}
      . size(5.8556cm, 5.8333cm);
      . add((175,175,175,0,0,175)*(new picture(){picture s=currentpicture,t=new picture;currentpicture=t;draw(ellipse((0,0),1,1), rgb(0, 0, 0)+linewidth(0.0038095));currentpicture=s;return t;})());
@@ -535,8 +535,9 @@ class _Color(_GraphicsElement):
                 # become RGBColor[0, 0, 0, 1]. does not seem the right thing
                 # to do in this general context. poke1024
 
-                if len(components) < 3:
-                   components.extend(self.default_components[len(components):])
+                # if len(components) < len(self.default_components):
+                #    components.extend(self.default_components[
+                #                      len(components):])
 
                 self.components = components
             else:
@@ -993,6 +994,54 @@ class FontColor(Builtin):
         <dd>is an option for Style to set the font color.
     </dl>
     """
+    pass
+
+
+class FontSize(_GraphicsElement):
+    """
+    <dl>
+    <dt>'FontSize[$s$]'
+        <dd>sets the font size to $s$ printer's points.
+    </dl>
+    """
+
+    def init(self, graphics, item=None, value=None):
+        super(FontSize, self).init(graphics, item)
+
+        self.scaled = False
+        if item is not None and len(item.leaves) == 1:
+            if item.leaves[0].get_head_name() == 'System`Scaled':
+                scaled = item.leaves[0]
+                if len(scaled.leaves) == 1:
+                    self.scaled = True
+                    self.value = scaled.leaves[0].round_to_float()
+
+        if self.scaled:
+            pass
+        elif item is not None:
+            self.value = item.leaves[0].round_to_float()
+        elif value is not None:
+            self.value = value
+        else:
+            raise BoxConstructError
+
+        if self.value < 0:
+            raise BoxConstructError
+
+    def get_size(self):
+        if self.scaled:
+            if self.graphics.extent_width is None:
+                return 1.
+            else:
+                return self.graphics.extent_width * self.value
+        else:
+            if self.graphics.extent_width is None or self.graphics.pixel_width is None:
+                return 1.
+            else:
+                return (96. / 72.) * (self.value * self.graphics.extent_width / self.graphics.pixel_width)
+
+
+class Scaled(Builtin):
     pass
 
 
@@ -2556,14 +2605,20 @@ class GeometricTransformationBox(_GraphicsElement):
 
 
 class InsetBox(_GraphicsElement):
-    def init(self, graphics, style, item=None, content=None, pos=None, opos=(0, 0), font_size=None):
+    def init(self, graphics, style, item=None, content=None, pos=None,
+             opos=(0, 0), font_size=None):
         super(InsetBox, self).init(graphics, item, style)
 
         self.color = self.style.get_option('System`FontColor')
         if self.color is None:
             self.color, _ = style.get_style(_Color, face_element=False)
 
-        self.font_size = font_size
+        if font_size is not None:
+            self.font_size = FontSize(self.graphics, value=font_size)
+        else:
+            self.font_size, _ = self.style.get_style(FontSize, face_element=False)
+            if self.font_size is None:
+                self.font_size = FontSize(self.graphics, value=10.)
 
         if item is not None:
             if len(item.leaves) not in (1, 2, 3):
@@ -2584,13 +2639,17 @@ class InsetBox(_GraphicsElement):
             self.pos = pos
             self.opos = opos
 
-        if self.graphics.evaluation.output.svgify():
+        try:
             self._prepare_text_svg()
-        else:
+        except WebEngineUnavailable as e:
             self.svg = None
 
             self.content_text = self.content.boxes_to_text(
                 evaluation=self.graphics.evaluation)
+
+            if self.graphics.evaluation.output.warn_about_web_engine():
+                self.graphics.evaluation.message(
+                    'General', 'nowebeng', str(e), once=True)
 
     def extent(self):
         p = self.pos.pos()
@@ -2601,7 +2660,7 @@ class InsetBox(_GraphicsElement):
                 7  # rough approximation by numbers of characters
         else:
             _, w, h = self.svg
-            scale = self._text_svg_scale()
+            scale = self._text_svg_scale(h)
             w *= scale
             h *= scale
 
@@ -2611,11 +2670,15 @@ class InsetBox(_GraphicsElement):
         return [(x, y), (x + w, y + h)]
 
     def _prepare_text_svg(self):
+        # self.graphics.evaluation.output.assume_web_engine()
+
         content = self.content.boxes_to_xml(
             evaluation=self.graphics.evaluation)
 
         svg = self.graphics.evaluation.output.mathml_to_svg(
             '<math>%s</math>' % content)
+
+        svg = svg.replace('style', 'data-style', 1)  # HACK
 
         # we could parse the svg and edit it. using regexps here should be
         # a lot faster though.
@@ -2636,30 +2699,27 @@ class InsetBox(_GraphicsElement):
 
         self.svg = (svg, width, height)
 
-    def _text_svg_scale(self):
-        svg, width, height = self.svg
+    def _text_svg_scale(self, height):
+        size = self.font_size.get_size()
+        return size / height
 
-        x, y = self.pos.pos()
-        x2, y2 = self.pos.add(width, height).pos()
-        target_height = abs(y2 - y)
-
-        if self.font_size is None:
-            font_size = 0.5
-            return font_size * target_height / height
-        else:
-            return self.font_size / height  # absolute coords
-
-    def _text_svg_xml(self, style, x, y):
+    def _text_svg_xml(self, style, x, y, absolute):
         svg, width, height = self.svg
         svg = re.sub(r'<svg ', '<svg style="%s" ' % style, svg, 1)
 
-        scale = self._text_svg_scale()
+        scale = self._text_svg_scale(height)
         ox, oy = self.opos
 
-        return '<g transform="translate(%f,%f) scale(%f) translate(%f, %f)">%s</g>' % (
+        if absolute:
+            tx, ty = (1., 1.)
+        else:
+            tx, ty = self.graphics.text_rescale
+
+        return '<g transform="translate(%f,%f) scale(%f,%f) translate(%f, %f)">%s</g>' % (
             x,
             y,
-            scale,
+            scale * tx,
+            scale * ty,
             -width / 2 - ox * width / 2,
             -height / 2 + oy * height / 2,
             svg)
@@ -2673,19 +2733,19 @@ class InsetBox(_GraphicsElement):
             evaluation=evaluation)
         style = create_css(font_color=self.color)
 
-        if not absolute:
-            x, y = list(self.graphics.local_to_screen.transform([(x, y)]))[0]
-
         if not self.svg:
+            if not absolute:
+                x, y = list(self.graphics.local_to_screen.transform([(x, y)]))[0]
+
             svg = (
                 '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
                 '<math>%s</math></foreignObject>') % (
                     x, y, self.opos[0], self.opos[1], style, content)
-        else:
-            svg = self._text_svg_xml(style, x, y)
 
-        if not absolute:
-            svg = self.graphics.inverse_local_to_screen.to_svg(svg)
+            if not absolute:
+                svg = self.graphics.inverse_local_to_screen.to_svg(svg)
+        else:
+            svg = self._text_svg_xml(style, x, y, absolute)
 
         return svg
 
@@ -2832,30 +2892,14 @@ class Style(object):
         return AxisStyle(self)
 
 
-class AxisStyle(object):
-    # used exclusively for graphics generated inside GraphicsBox.create_axes().
-    # wraps a Style instance for graphics and does not operate on local but on
-    # screen space, i.e. has to apply "local_to_screen" to all widths, sizes, ...
-
+class AxisStyle(Style):
     def __init__(self, style):
-        self.base = Style(style.graphics)
-        self.base.extend(style)
-        self.sx = style.graphics.local_to_screen.matrix[0][0]
-
-    def extend(self, style, pre=True):
-        self.base.extend(style.base, pre)
-
-    def clone(self):
-        return AxisStyle(self.base.clone())
-
-    def get_style(self, *args, **kwargs):
-        return self.base.get_style(*args, **kwargs)
-
-    def get_option(self, name):
-        return self.base.get_option(name)
+        super(AxisStyle, self).__init__(style.graphics, style.edge, style.face)
+        self.styles = style.styles
+        self.options = style.options
 
     def get_line_width(self, face_element=True):
-        return self.base.get_line_width(face_element) * self.sx
+        return 0.5
 
 
 def _flatten(leaves):
@@ -2874,6 +2918,7 @@ def _flatten(leaves):
 class _GraphicsElements(object):
     def __init__(self, content, evaluation):
         self.evaluation = evaluation
+        self.web_engine_warning_issued = False
 
         builtins = evaluation.definitions.builtin
         def get_options(name):
@@ -3002,6 +3047,7 @@ class GraphicsElements(_GraphicsElements):
         self.elements[0].patch_transforms([transform])
         self.local_to_screen = transform
         self.inverse_local_to_screen = transform.inverse()
+        self.text_rescale = (1., -1. if self.neg_y else 1.)
 
     def add_axis_element(self, e):
         # axis elements are added after the GeometricTransformationBox and are thus not
@@ -3316,23 +3362,13 @@ clip(%s);
         w += 2
         h += 2
 
-        svgify = options['evaluation'].output.svgify()
-
-        if not svgify:
-            params = ''
-        else:
-            params = 'width="%dpx" height="%dpx"' % (width, height)
-
         svg_xml = '<svg xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg" ' \
-            'version="1.1" viewBox="%s" %s>%s</svg>' % (' '.join('%f' % t for t in (xmin, ymin, w, h)), params, svg)
+            'version="1.1" viewBox="%s">%s</svg>' % (' '.join('%f' % t for t in (xmin, ymin, w, h)), svg)
 
-        if not svgify:
-            return '<mglyph width="%dpx" height="%dpx" src="data:image/svg+xml;base64,%s"/>' % (
-                int(width),
-                int(height),
-                base64.b64encode(svg_xml.encode('utf8')).decode('utf8'))
-        else:
-            return svg_xml
+        return '<mglyph width="%dpx" height="%dpx" src="data:image/svg+xml;base64,%s"/>' % (
+            int(width),
+            int(height),
+            base64.b64encode(svg_xml.encode('utf8')).decode('utf8'))
 
     def axis_ticks(self, xmin, xmax):
         def round_to_zero(value):
@@ -3437,6 +3473,9 @@ clip(%s);
         tick_large_size = 5
         tick_label_d = 2
 
+        # hack: work around the local to screen scaling in class FontSize
+        font_size = tick_large_size * 2. / (elements.extent_width / elements.pixel_width)
+
         ticks_x_int = all(floor(x) == x for x in ticks_x)
         ticks_y_int = all(floor(x) == x for x in ticks_y)
 
@@ -3455,7 +3494,6 @@ clip(%s);
                 ticks_lines = []
                 tick_label_style = ticks_style[index].clone()
                 tick_label_style.extend(label_style)
-                font_size = tick_large_size * 3.
                 for x in ticks:
                     ticks_lines.append([AxisCoords(elements, pos=p_origin(x)),
                                         AxisCoords(elements, pos=p_origin(x),
@@ -3470,7 +3508,7 @@ clip(%s);
                         elements, tick_label_style,
                         content=content,
                         pos=AxisCoords(elements, pos=p_origin(x),
-                        d=p_self0(-tick_label_d)), opos=p_self0(1), font_size=font_size))
+                                   d=p_self0(-tick_label_d)), opos=p_self0(1), font_size=font_size))
                 for x in ticks_small:
                     pos = p_origin(x)
                     ticks_lines.append([AxisCoords(elements, pos=pos),
@@ -3882,6 +3920,7 @@ styles = system_symbols_dict({
     'Thick': Thick,
     'Thin': Thin,
     'PointSize': PointSize,
+    'FontSize': FontSize,
     'Arrowheads': Arrowheads,
 })
 
