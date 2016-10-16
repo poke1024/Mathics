@@ -1022,69 +1022,89 @@ class Expression(BaseExpression):
             return self
 
     def evaluate(self, evaluation):
+        from mathics.core.evaluation import ReturnInterrupt
+
         expr = self
         reevaluate = True
         limit = None
         iteration = 1
+        names = []
+        definitions = evaluation.definitions
 
-        while reevaluate:
-            expr, reevaluate = expr.evaluate_next(evaluation)
-            if not reevaluate:
-                break
+        old_options = evaluation.options
+        evaluation.inc_recursion_depth()
 
-            iteration += 1
+        try:
+            while reevaluate:
+                # changed before last evaluated?
+                if not expr.has_changed(definitions):
+                    break
 
-            if limit is None:
-                limit = evaluation.definitions.get_config_value('$IterationLimit')
+                names.append(expr.get_lookup_name())
+
+                if hasattr(expr, 'options') and expr.options:
+                    evaluation.options = expr.options
+
+                expr, reevaluate = expr.evaluate_next(evaluation)
+                if not reevaluate:
+                    break
+
+                iteration += 1
+
                 if limit is None:
-                    limit = 'inf'
-            if limit != 'inf' and iteration > limit:
-                evaluation.error('$IterationLimit', 'itlim', limit)
-                return Symbol('$Aborted')
+                    limit = definitions.get_config_value('$IterationLimit')
+                    if limit is None:
+                        limit = 'inf'
+                if limit != 'inf' and iteration > limit:
+                    evaluation.error('$IterationLimit', 'itlim', limit)
+                    return Symbol('$Aborted')
+
+        # "Return gets discarded only if it was called from within the r.h.s.
+        # of a user-defined rule."
+        # http://mathematica.stackexchange.com/questions/29353/how-does-return-work
+        # Otherwise it propogates up.
+        #
+        except ReturnInterrupt as ret:
+            if any(name in definitions.user for name in names):
+                return ret.expr
+            else:
+                raise ret
+        finally:
+            evaluation.options = old_options
+            evaluation.dec_recursion_depth()
 
         return expr
 
     def evaluate_next(self, evaluation):
-        from mathics.core.evaluation import ReturnInterrupt
-        evaluation.inc_recursion_depth()
-        old_options = evaluation.options
-        if hasattr(self, 'options') and self.options:
-            evaluation.options = self.options
-        try:
-            # changed before last evaluated?
-            if not self.has_changed(evaluation.definitions):
-                return self, False
-            head = self._head.evaluate(evaluation)
-            attributes = head.get_attributes(evaluation.definitions)
-            leaves = self.get_mutable_leaves()
+        head = self.head.evaluate(evaluation)
+        attributes = head.get_attributes(evaluation.definitions)
+        leaves = self.leaves[:]
 
-            def rest_range(indices):
-                if 'System`HoldAllComplete' not in attributes:
-                    if self._no_symbol('System`Evaluate'):
-                        return
-                    for index in indices:
-                        leaf = leaves[index]
-                        if leaf.has_form('Evaluate', 1):
-                            leaves[index] = leaf.evaluate(evaluation)
-
-            def eval_range(indices):
+        def rest_range(indices):
+            if 'System`HoldAllComplete' not in attributes:
                 for index in indices:
                     leaf = leaves[index]
-                    if not leaf.has_form('Unevaluated', 1):
+                    if leaf.has_form('Evaluate', 1):
                         leaves[index] = leaf.evaluate(evaluation)
 
-            if 'System`HoldAll' in attributes or 'System`HoldAllComplete' in attributes:
-                # eval_range(range(0, 0))
-                rest_range(range(len(leaves)))
-            elif 'System`HoldFirst' in attributes:
-                rest_range(range(0, min(1, len(leaves))))
-                eval_range(range(1, len(leaves)))
-            elif 'System`HoldRest' in attributes:
-                eval_range(range(0, min(1, len(leaves))))
-                rest_range(range(1, len(leaves)))
-            else:
-                eval_range(range(len(leaves)))
-                # rest_range(range(0, 0))
+        def eval_range(indices):
+            for index in indices:
+                leaf = leaves[index]
+                if not leaf.has_form('Unevaluated', 1):
+                    leaves[index] = leaf.evaluate(evaluation)
+
+        if 'System`HoldAll' in attributes or 'System`HoldAllComplete' in attributes:
+            # eval_range(range(0, 0))
+            rest_range(range(len(leaves)))
+        elif 'System`HoldFirst' in attributes:
+            rest_range(range(0, min(1, len(leaves))))
+            eval_range(range(1, len(leaves)))
+        elif 'System`HoldRest' in attributes:
+            eval_range(range(0, min(1, len(leaves))))
+            rest_range(range(1, len(leaves)))
+        else:
+            eval_range(range(len(leaves)))
+            # rest_range(range(0, 0))
 
             new = Expression(head)
             new._leaves = tuple(leaves)
@@ -1094,8 +1114,8 @@ class Expression(BaseExpression):
                 new = new.flatten_sequence(evaluation)
                 leaves = new._leaves
 
-            for leaf in leaves:
-                leaf.unevaluated = False
+        for leaf in leaves:
+            leaf.unevaluated = False
 
             if 'System`HoldAllComplete' not in attributes:
                 dirty_leaves = None
@@ -1112,9 +1132,9 @@ class Expression(BaseExpression):
                     new._leaves = tuple(dirty_leaves)
                     leaves = dirty_leaves
 
-            def flatten_callback(new_leaves, old):
-                for leaf in new_leaves:
-                    leaf.unevaluated = old.unevaluated
+        def flatten_callback(new_leaves, old):
+            for leaf in new_leaves:
+                leaf.unevaluated = old.unevaluated
 
             if 'System`Flat' in attributes:
                 new = new.flatten(new._head, callback=flatten_callback)
@@ -1132,23 +1152,23 @@ class Expression(BaseExpression):
                     else:
                         return threaded, True
 
-            def rules():
-                rules_names = set()
-                if 'System`HoldAllComplete' not in attributes:
-                    for leaf in leaves:
-                        name = leaf.get_lookup_name()
-                        if len(name) > 0:  # only lookup rules if this is a symbol
-                            if name not in rules_names:
-                                rules_names.add(name)
-                                for rule in evaluation.definitions.get_upvalues(name):
-                                    yield rule
-                lookup_name = new.get_lookup_name()
-                if lookup_name == new.get_head_name():
-                    for rule in evaluation.definitions.get_downvalues(lookup_name):
-                        yield rule
-                else:
-                    for rule in evaluation.definitions.get_subvalues(lookup_name):
-                        yield rule
+        def rules():
+            rules_names = set()
+            if 'System`HoldAllComplete' not in attributes:
+                for leaf in leaves:
+                    name = leaf.get_lookup_name()
+                    if len(name) > 0:  # only lookup rules if this is a symbol
+                        if name not in rules_names:
+                            rules_names.add(name)
+                            for rule in evaluation.definitions.get_upvalues(name):
+                                yield rule
+            lookup_name = new.get_lookup_name()
+            if lookup_name == new.get_head_name():
+                for rule in evaluation.definitions.get_downvalues(lookup_name):
+                    yield rule
+            else:
+                for rule in evaluation.definitions.get_subvalues(lookup_name):
+                    yield rule
 
             for rule in rules():
                 result = rule.apply(new, evaluation, fully=False)
@@ -1175,20 +1195,6 @@ class Expression(BaseExpression):
             new.unformatted = self.unformatted
             new._timestamp_cache(evaluation)
             return new, False
-
-        # "Return gets discarded only if it was called from within the r.h.s.
-        # of a user-defined rule."
-        # http://mathematica.stackexchange.com/questions/29353/how-does-return-work
-        # Otherwise it propogates up.
-        #
-        except ReturnInterrupt as ret:
-            if self.get_lookup_name() in evaluation.definitions.user:
-                return ret.expr, False
-            else:
-                raise ret
-        finally:
-            evaluation.options = old_options
-            evaluation.dec_recursion_depth()
 
     def evaluate_leaves(self, evaluation):
         leaves = [leaf.evaluate(evaluation) for leaf in self._leaves]
