@@ -2670,7 +2670,7 @@ class InsetBox(_GraphicsElement):
         return [(x, y), (x + w, y + h)]
 
     def _prepare_text_svg(self):
-        # self.graphics.evaluation.output.assume_web_engine()
+        self.graphics.evaluation.output.assume_web_engine()
 
         content = self.content.boxes_to_xml(
             evaluation=self.graphics.evaluation)
