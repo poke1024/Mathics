@@ -1663,6 +1663,7 @@ class General(Builtin):
                   "To generate the whole output, please set $OutputSizeLimit = Infinity.",
 
         'pyimport': "`1`[] is not available. Your Python installation misses the \"`2`\" module.",
+        'nowebeng': "Web Engine is not available: `1`",
     }
 
 
