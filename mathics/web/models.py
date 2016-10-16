@@ -22,9 +22,10 @@ _evaluations = {}
 def get_session_evaluation(session):
     evaluation = _evaluations.get(session.session_key)
     if evaluation is None:
+        from mathics.server import layout_engine
         definitions = Definitions(add_builtin=True)
         evaluation = Evaluation(
-            definitions, format='xml', output=WebOutput())
+            definitions, format='xml', output=WebOutput(layout_engine))
         _evaluations[session.session_key] = evaluation
     return evaluation
 

@@ -10,6 +10,7 @@ from __future__ import absolute_import
 from __future__ import division
 
 from math import floor, ceil, log10, sin, cos, pi, sqrt, atan2, degrees, radians, exp
+import re
 import json
 import base64
 from six.moves import map
@@ -2555,12 +2556,14 @@ class GeometricTransformationBox(_GraphicsElement):
 
 
 class InsetBox(_GraphicsElement):
-    def init(self, graphics, style, item=None, content=None, pos=None, opos=(0, 0)):
+    def init(self, graphics, style, item=None, content=None, pos=None, opos=(0, 0), font_size=None):
         super(InsetBox, self).init(graphics, item, style)
 
         self.color = self.style.get_option('System`FontColor')
         if self.color is None:
             self.color, _ = style.get_style(_Color, face_element=False)
+
+        self.font_size = font_size
 
         if item is not None:
             if len(item.leaves) not in (1, 2, 3):
@@ -2580,35 +2583,106 @@ class InsetBox(_GraphicsElement):
             self.content = content
             self.pos = pos
             self.opos = opos
-        self.content_text = self.content.boxes_to_text(
-            evaluation=self.graphics.evaluation)
+
+        if self.graphics.evaluation.output.svgify():
+            self._prepare_text_svg()
+        else:
+            self.svg = None
+
+            self.content_text = self.content.boxes_to_text(
+                evaluation=self.graphics.evaluation)
 
     def extent(self):
         p = self.pos.pos()
-        s = 0.01  # .1 / (self.graphics.pixel_width or 1.)
-        h = s * 25
-        w = len(self.content_text) * \
-            s * 7  # rough approximation by numbers of characters
+
+        if not self.svg:
+            h = 25
+            w = len(self.content_text) * \
+                7  # rough approximation by numbers of characters
+        else:
+            _, w, h = self.svg
+            scale = self._text_svg_scale()
+            w *= scale
+            h *= scale
+
         opos = self.opos
         x = p[0] - w / 2.0 - opos[0] * w / 2.0
         y = p[1] - h / 2.0 + opos[1] * h / 2.0
         return [(x, y), (x + w, y + h)]
 
+    def _prepare_text_svg(self):
+        content = self.content.boxes_to_xml(
+            evaluation=self.graphics.evaluation)
+
+        svg = self.graphics.evaluation.output.mathml_to_svg(
+            '<math>%s</math>' % content)
+
+        # we could parse the svg and edit it. using regexps here should be
+        # a lot faster though.
+
+        def extract_dimension(svg, name):
+            values = [0.]
+
+            def replace(m):
+                value = m.group(1)
+                values.append(float(value))
+                return '%s="%s"' % (name, value)
+
+            svg = re.sub(name + r'="([0-9\.]+)ex"', replace, svg, 1)
+            return svg, values[-1]
+
+        svg, width = extract_dimension(svg, 'width')
+        svg, height = extract_dimension(svg, 'height')
+
+        self.svg = (svg, width, height)
+
+    def _text_svg_scale(self):
+        svg, width, height = self.svg
+
+        x, y = self.pos.pos()
+        x2, y2 = self.pos.add(width, height).pos()
+        target_height = abs(y2 - y)
+
+        if self.font_size is None:
+            font_size = 0.5
+            return font_size * target_height / height
+        else:
+            return self.font_size / height  # absolute coords
+
+    def _text_svg_xml(self, style, x, y):
+        svg, width, height = self.svg
+        svg = re.sub(r'<svg ', '<svg style="%s" ' % style, svg, 1)
+
+        scale = self._text_svg_scale()
+        ox, oy = self.opos
+
+        return '<g transform="translate(%f,%f) scale(%f) translate(%f, %f)">%s</g>' % (
+            x,
+            y,
+            scale,
+            -width / 2 - ox * width / 2,
+            -height / 2 + oy * height / 2,
+            svg)
+
     def to_svg(self):
+        evaluation = self.graphics.evaluation
         x, y = self.pos.pos()
         absolute = self.pos.is_absolute()
 
         content = self.content.boxes_to_xml(
-            evaluation=self.graphics.evaluation)
+            evaluation=evaluation)
         style = create_css(font_color=self.color)
 
         if not absolute:
             x, y = list(self.graphics.local_to_screen.transform([(x, y)]))[0]
 
-        svg = (
-            '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
-            '<math>%s</math></foreignObject>') % (
-                x, y, self.opos[0], self.opos[1], style, content)
+        if not self.svg:
+            svg = (
+                '<foreignObject x="%f" y="%f" ox="%f" oy="%f" style="%s">'
+                '<math>%s</math></foreignObject>') % (
+                    x, y, self.opos[0], self.opos[1], style, content)
+        else:
+            svg = self._text_svg_xml(style, x, y)
 
         if not absolute:
             svg = self.graphics.inverse_local_to_screen.to_svg(svg)
@@ -3242,19 +3316,23 @@ clip(%s);
         w += 2
         h += 2
 
-        svg_xml = '''
-            <svg xmlns:svg="http://www.w3.org/2000/svg"
-                xmlns="http://www.w3.org/2000/svg"
-                version="1.1"
-                viewBox="%s">
-                %s
-            </svg>
-        ''' % (' '.join('%f' % t for t in (xmin, ymin, w, h)), svg)
+        svgify = options['evaluation'].output.svgify()
 
-        return '<mglyph width="%dpx" height="%dpx" src="data:image/svg+xml;base64,%s"/>' % (
-            int(width),
-            int(height),
-            base64.b64encode(svg_xml.encode('utf8')).decode('utf8'))
+        if not svgify:
+            params = ''
+        else:
+            params = 'width="%dpx" height="%dpx"' % (width, height)
+
+        svg_xml = '<svg xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg" ' \
+            'version="1.1" viewBox="%s" %s>%s</svg>' % (' '.join('%f' % t for t in (xmin, ymin, w, h)), params, svg)
+
+        if not svgify:
+            return '<mglyph width="%dpx" height="%dpx" src="data:image/svg+xml;base64,%s"/>' % (
+                int(width),
+                int(height),
+                base64.b64encode(svg_xml.encode('utf8')).decode('utf8'))
+        else:
+            return svg_xml
 
     def axis_ticks(self, xmin, xmax):
         def round_to_zero(value):
@@ -3377,6 +3455,7 @@ clip(%s);
                 ticks_lines = []
                 tick_label_style = ticks_style[index].clone()
                 tick_label_style.extend(label_style)
+                font_size = tick_large_size * 3.
                 for x in ticks:
                     ticks_lines.append([AxisCoords(elements, pos=p_origin(x)),
                                         AxisCoords(elements, pos=p_origin(x),
@@ -3391,7 +3470,7 @@ clip(%s);
                         elements, tick_label_style,
                         content=content,
                         pos=AxisCoords(elements, pos=p_origin(x),
-                        d=p_self0(-tick_label_d)), opos=p_self0(1)))
+                        d=p_self0(-tick_label_d)), opos=p_self0(1), font_size=font_size))
                 for x in ticks_small:
                     pos = p_origin(x)
                     ticks_lines.append([AxisCoords(elements, pos=pos),
