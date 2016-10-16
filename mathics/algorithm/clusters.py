@@ -9,6 +9,7 @@ import bisect
 import math
 
 from mpmath import fsum
+from mathics.core.util import robust_min
 
 # publications used for this file:
 
@@ -47,14 +48,6 @@ def _index(i, j):  # i > j, returns j + sum(1, 2, ..., i - 1)
 
     # a = 0, b = 1, c = 2
     return j + ((i - 1) * i) // 2
-
-
-def _robust_min(iterable):
-    minimum = None
-    for i in iterable:
-        if minimum is None or i < minimum:
-            minimum = i
-    return minimum
 
 
 def _ordered2(a, cmp):
@@ -347,7 +340,7 @@ class ApproximateSilhouetteSplitCriterion(SplitCriterion):
         other = other_medoids  # fast version
 
         for i, a in medoids():
-            yield _robust_min((distance(a, b) for b in other(i)))
+            yield robust_min((distance(a, b) for b in other(i)))
 
 AutomaticSplitCriterion = ApproximateSilhouetteSplitCriterion
 
