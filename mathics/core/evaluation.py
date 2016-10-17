@@ -225,6 +225,7 @@ class Evaluation(object):
         self.listeners = {}
         self.options = None
         self.predetermined_out = None
+        self.once_messages = set()
 
         self.quiet_all = False
         self.format = format
@@ -440,6 +441,11 @@ class Evaluation(object):
 
         pattern = Expression('MessageName', Symbol(symbol), String(tag))
 
+        if kwargs.get('once', False):
+            if pattern in self.once_messages:
+                return
+            self.once_messages.add(pattern)
+
         if pattern in quiet_messages or self.quiet_all:
             return
 
@@ -463,7 +469,7 @@ class Evaluation(object):
             text = String("Message %s::%s not found." % (symbol_shortname, tag))
 
         text = self.format_output(Expression(
-            'StringForm', text, *(from_python(arg) for arg in args)), 'text', warn_about_omitted=False)
+            'StringForm', text, *(from_python(arg) for arg in args)), 'text')
 
         self.out.append(Message(symbol_shortname, tag, text))
         self.output.out(self.out[-1])
