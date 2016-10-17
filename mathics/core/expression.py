@@ -2601,33 +2601,35 @@ def print_parenthesizes(precedence, outer_precedence=None,
             outer_precedence == precedence and parenthesize_when_equal)))
 
 
-def _is_neutral_head(head, cache, evaluation):
-    # a head is neutral if it does not invoke any rules, but is sure to make its Expression stay
+def _is_neutral_symbol(symbol_name, cache, evaluation):
+    # a symbol is neutral if it does not invoke any rules, but is sure to make its Expression stay
     # the way it is (e.g. List[1, 2, 3] will always stay List[1, 2, 3], so long as nobody defines
     # a rule on this).
 
-    if not isinstance(head, Symbol):
-        return False
-
-    head_name = head.get_name()
-
     if cache:
-        r = cache.get(head_name)
+        r = cache.get(symbol_name)
         if r is not None:
             return r
 
     definitions = evaluation.definitions
 
-    definition = definitions.get_definition(head_name, only_if_exists=True)
+    definition = definitions.get_definition(symbol_name, only_if_exists=True)
     if definition is None:
         r = True
     else:
         r = all(len(definition.get_values_list(x)) == 0 for x in ('up', 'sub', 'down', 'own'))
 
     if cache:
-        cache[head_name] = r
+        cache[symbol_name] = r
 
     return r
+
+
+def _is_neutral_head(head, cache, evaluation):
+    if not isinstance(head, Symbol):
+        return False
+
+    return _is_neutral_symbol(head.get_name(), cache, evaluation)
 
 
 # Structure helps implementations make the ExpressionCache not invalidate across simple commands
@@ -2968,3 +2970,26 @@ def make_boxes_strategy(capacity, omissions, evaluation):
     else:
         return _LimitedMakeBoxesStrategy(capacity, omissions, evaluation)
 
+
+def atom_list(head, leaves, atom_names, evaluation):
+    # if we encounter an Expression that consists wholly of atoms and those atoms have
+    # no rules associated with them, we can speed up evaluation.
+
+    expr = Expression(head)
+    expr._leaves = leaves
+
+    if not _is_neutral_head(head, None, evaluation) or any(not atom for atom in atom_names):
+        return expr
+
+    full_atom_names = [ensure_context(atom) for atom in atom_names]
+
+    if not all(_is_neutral_symbol(atom, None, evaluation) for atom in full_atom_names):
+        return expr
+
+    sym = set(chain([head.get_name()], full_atom_names))
+    expr._cache = ExpressionCache(evaluation.definitions.now, sym, None)
+    return expr
+
+
+def string_list(head, leaves, evaluation):
+    return atom_list(head, leaves, ('String',), evaluation)
