@@ -819,13 +819,13 @@ class Part(Builtin):
 
     attributes = ('NHoldRest', 'ReadProtected')
 
-    def apply_makeboxes(self, list, i, f, evaluation):
-        '''MakeBoxes[Part[list_, i___],
+    def apply_makeboxes(self, l, i, f, evaluation):
+        '''MakeBoxes[Part[l_, i___],
             f:StandardForm|TraditionalForm|OutputForm|InputForm]'''
 
         i = i.get_sequence()
 
-        list = Expression('MakeBoxes', list, f)
+        l = Expression('MakeBoxes', l, f)
 
         if f.get_name() in ('System`OutputForm', 'System`InputForm'):
             open, close = "[[", "]]"
@@ -835,7 +835,7 @@ class Part(Builtin):
         def materialize(prefix, inner, suffix):
             return Expression('RowBox', Expression('List', *list(chain(prefix, inner, suffix))))
 
-        return list_boxes(list, i, materialize, f, evaluation, open, close)
+        return list_boxes(l, i, materialize, f, evaluation, open, close)
 
     def apply(self, list, i, evaluation):
         'Part[list_, i___]'
