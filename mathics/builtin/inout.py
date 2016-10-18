@@ -22,7 +22,7 @@ from mathics.builtin.lists import list_boxes
 from mathics.builtin.options import options_to_rules
 from mathics.core.expression import (
     Expression, String, Symbol, Integer, Rational, Real, Complex, BoxError,
-    from_python, MachineReal, PrecisionReal)
+    from_python, MachineReal, PrecisionReal, Omitted)
 from mathics.core.numbers import (
     dps, prec, convert_base, machine_precision, reconstruct_digits)
 
@@ -797,16 +797,17 @@ class Grid(Builtin):
         lengths = [len(row.leaves) for row in array.leaves]
         n_leaves = sum(lengths)
 
-        def materialize(boxes):
-            if len(boxes) == n_leaves:
+        def materialize(prefix, inner, suffix):
+            if len(inner) == n_leaves:
+                # FIXME prefix, suffix
                 rows = []
                 i = 0
                 for l in lengths:
-                    rows.append(Expression('List', *boxes[i:i + l]))
+                    rows.append(Expression('List', *inner[i:i + l]))
                     i += l
                 return Expression(
                     'GridBox',
-                    Expression('List', *rows),
+                    Expression('List',  *rows),
                     *options_to_rules(options))
             else:  # too long
                 return Omitted('<<%d>>' % n_leaves)
