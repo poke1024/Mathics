@@ -1134,20 +1134,20 @@ class Expression(BaseExpression):
         for leaf in leaves:
             leaf.unevaluated = False
 
-            if 'System`HoldAllComplete' not in attributes:
-                dirty_leaves = None
+        if 'System`HoldAllComplete' not in attributes:
+            dirty_leaves = None
 
-                for index, leaf in enumerate(leaves):
-                    if leaf.has_form('Unevaluated', 1):
-                        if dirty_leaves is None:
-                            dirty_leaves = list(leaves)
-                        dirty_leaves[index] = leaf._leaves[0]
-                        dirty_leaves[index].unevaluated = True
+            for index, leaf in enumerate(leaves):
+                if leaf.has_form('Unevaluated', 1):
+                    if dirty_leaves is None:
+                        dirty_leaves = list(leaves)
+                    dirty_leaves[index] = leaf._leaves[0]
+                    dirty_leaves[index].unevaluated = True
 
-                if dirty_leaves:
-                    new = Expression(head)
-                    new._leaves = tuple(dirty_leaves)
-                    leaves = dirty_leaves
+            if dirty_leaves:
+                new = Expression(head)
+                new._leaves = tuple(dirty_leaves)
+                leaves = dirty_leaves
 
         def flatten_callback(new_leaves, old):
             for leaf in new_leaves:
