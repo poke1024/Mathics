@@ -35,6 +35,8 @@ from mathics.core.numbers import dps
 from mathics.builtin.base import (Builtin, Predefined, BinaryOperator,
                                   PrefixOperator)
 from mathics.builtin.numeric import Hash
+from mathics.builtin.strings import to_python_encoding
+from mathics.builtin.base import MessageException
 from mathics.settings import ROOT_DIR
 
 
@@ -137,11 +139,17 @@ class mathics_open:
         # determine encoding
         if 'b' not in self.mode:
             encoding = self.encoding
+            if encoding is None:
+                python_encoding = None
+            else:
+                python_encoding = to_python_encoding(encoding)
+                if python_encoding is None:
+                    raise MessageException('General', 'charcode', encoding)
         else:
-            encoding = None
+            python_encoding = None
 
         # open the stream
-        stream = io.open(path, self.mode, encoding=encoding)
+        stream = io.open(path, self.mode, encoding=python_encoding)
 
         # build the Expression
         n = next(NSTREAMS)
@@ -1973,6 +1981,9 @@ class _OpenAction(Builtin):
         except IOError:
             evaluation.message('General', 'noopen', path)
             return
+        except MessageException as e:
+            e.message(evaluation)
+            return
 
         return Expression(self.stream_type, path, Integer(n))
 
@@ -2117,6 +2128,9 @@ class Get(PrefixOperator):
                     result = query.evaluate(evaluation)
         except IOError:
             evaluation.message('General', 'noopen', path)
+            return Symbol('$Failed')
+        except MessageException as e:
+            e.message(evaluation)
             return Symbol('$Failed')
         return result
 
@@ -2971,6 +2985,9 @@ class FilePrint(Builtin):
         except IOError:
             evaluation.message('General', 'noopen', path)
             return
+        except MessageException as e:
+            e.message(evaluation)
+            return
 
         result = [result]
         for sep in record_separators:
@@ -3408,6 +3425,9 @@ class FindList(Builtin):
             except IOError:
                 evaluation.message('General', 'noopen', path)
                 return
+            except MessageException as e:
+                e.message(evaluation)
+                return
 
             result = []
             for line in lines:
@@ -3652,6 +3672,9 @@ class FileByteCount(Builtin):
         except IOError:
             evaluation.message('General', 'noopen', filename)
             return
+        except MessageException as e:
+            e.message(evaluation)
+            return
 
         return from_python(count)
 
@@ -3711,7 +3734,11 @@ class FileHash(Builtin):
             with mathics_open(py_filename, 'rb') as f:
                 dump = f.read()
         except IOError:
-            return evaluation.message('General', 'noopen', filename)
+            evaluation.message('General', 'noopen', filename)
+            return
+        except MessageException as e:
+            e.message(evaluation)
+            return
 
         return Hash.compute(lambda update: update(dump), hashtype.get_string_value())
 
