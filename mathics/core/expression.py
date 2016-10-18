@@ -2815,7 +2815,7 @@ class Omissions:
 
     def warn(self, evaluation):
         if self._omissions:
-            evaluation.message('General', 'omit', ', '.join(self._omissions))
+            evaluation.message('General', 'omit', ', '.join(self._omissions), once=True)
 
 
 def _riffle_separators(elements, separators):
