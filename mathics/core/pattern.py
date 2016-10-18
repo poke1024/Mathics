@@ -406,8 +406,6 @@ class ExpressionPattern(Pattern):
 
         candidates = rest_expression[1]
 
-        leaf_candidates = set(leaf_candidates)  # for fast lookup
-
         # "Artificially" only use more leaves than specified for some kind
         # of pattern.
         # TODO: This could be further optimized!
@@ -431,6 +429,8 @@ class ExpressionPattern(Pattern):
         less_first = len(rest_leaves) > 0
 
         if 'System`Orderless' in attributes:
+            leaf_candidates = set(leaf_candidates)  # for fast lookup
+
             sets = None
             if leaf.get_head_name() == 'System`Pattern':
                 varname = leaf.leaves[0].get_name()
