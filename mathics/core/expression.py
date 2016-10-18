@@ -3007,7 +3007,7 @@ def make_boxes_strategy(capacity, omissions, evaluation):
         return _LimitedMakeBoxesStrategy(capacity, omissions, evaluation)
 
 
-def atom_list(head, leaves, atom_names, evaluation):
+def atom_list_constructor(evaluation, head, *atom_names):
     # if we encounter an Expression that consists wholly of atoms and those atoms have
     # no rules associated with them, we can speed up evaluation.
 
