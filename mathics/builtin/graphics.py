@@ -1436,13 +1436,19 @@ class PointBox(_Polyline):
             point_size = PointSize(self.graphics, value=0.005)
         size = point_size.get_size()
 
+        graphics = self.graphics
+        size_x = size
+        size_y = size_x * (graphics.extent_height / graphics.extent_width) * (graphics.pixel_width / graphics.pixel_height)
+
+
+
         style = create_css(edge_color=self.edge_color,
                            stroke_width=0, face_color=self.face_color)
         svg = ''
         for line in self.lines:
             for coords in line:
-                svg += '<circle cx="%f" cy="%f" r="%f" style="%s" />' % (
-                    coords.pos()[0], coords.pos()[1], size, style)
+                svg += '<ellipse cx="%f" cy="%f" rx="%f" ry="%f" style="%s" />' % (
+                    coords.pos()[0], coords.pos()[1], size_x, size_y, style)
         return svg
 
     def to_asy(self):
@@ -3022,6 +3028,7 @@ class GraphicsElements(_GraphicsElements):
 
     def set_size(self, xmin, ymin, extent_width, extent_height, pixel_width, pixel_height):
         self.pixel_width = pixel_width
+        self.pixel_height = pixel_height
         self.extent_width = extent_width
         self.extent_height = extent_height
 
