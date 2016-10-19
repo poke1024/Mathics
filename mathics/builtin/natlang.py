@@ -53,6 +53,7 @@ import itertools
 from itertools import chain
 import heapq
 import math
+import demandimport
 
 
 def _parse_nltk_lookup_error(e):
@@ -62,9 +63,56 @@ def _parse_nltk_lookup_error(e):
     else:
         return 'unknown'
 
+# nltk
 
-def _make_forms():
-    forms = {
+# the following two may only be accessed after_WordNetBuiltin._load_wordnet has
+# been called.
+
+_wordnet_pos_to_type = {}
+_wordnet_type_to_pos = {}
+
+with demandimport.enabled():
+    import nltk
+
+
+def _init_nltk_maps():
+    _wordnet_pos_to_type.update({
+        nltk.corpus.wordnet.VERB: 'Verb',
+        nltk.corpus.wordnet.NOUN: 'Noun',
+        nltk.corpus.wordnet.ADJ: 'Adjective',
+        nltk.corpus.wordnet.ADJ_SAT: 'Adjective',
+        nltk.corpus.wordnet.ADV: 'Adverb',
+    })
+    _wordnet_type_to_pos.update({
+        'Verb': [nltk.corpus.wordnet.VERB],
+        'Noun': [nltk.corpus.wordnet.NOUN],
+        'Adjective': [nltk.corpus.wordnet.ADJ, nltk.corpus.wordnet.ADJ_SAT],
+        'Adverb': [nltk.corpus.wordnet.ADV],
+    })
+
+# spacy
+
+with demandimport.enabled():
+    import spacy
+
+_forms = {}
+_pos_tags = {}
+_root_pos = set()
+
+
+def _init_spacy_forms():
+    # Mathics named entity names and their corresponding constants in spacy.
+    _symbols = {
+        'Person': spacy.symbols.PERSON,
+        'Company': spacy.symbols.ORG,
+        'Quantity': spacy.symbols.QUANTITY,
+        'Number': spacy.symbols.CARDINAL,
+        'CurrencyAmount': spacy.symbols.MONEY,
+        'Country': spacy.symbols.GPE,  # also includes cities and states
+        'City': spacy.symbols.GPE,  # also includes countries and states
+    }
+
+    _forms.update({
         'Word': lambda doc: (token for token in doc),
         'Sentence': lambda doc: (sent for sent in doc.sents),
         'Paragraph': lambda doc: _fragments(doc, re.compile(r"^[\n][\n]+$")),
@@ -72,7 +120,7 @@ def _make_forms():
 
         'URL': lambda doc: (token for token in doc if token.orth_.like_url()),
         'EmailAddress': lambda doc: (token for token in doc if token.orth_.like_email()),
-    }
+    })
 
     def filter_named_entity(label):
         def generator(doc):
@@ -91,84 +139,59 @@ def _make_forms():
         return generator
 
     for name, symbol in _symbols.items():
-        forms[name] = filter_named_entity(symbol)
+        _forms[name] = filter_named_entity(symbol)
+
+    _init_spacy_pos_tags()
 
     for tag, names in _pos_tags.items():
         name, phrase_name = names
-        forms[name] = filter_pos(tag)
+        _forms[name] = filter_pos(tag)
 
-    return forms
 
-# the following two may only be accessed after_WordNetBuiltin._load_wordnet has
-# been called.
-
-_wordnet_pos_to_type = {}
-_wordnet_type_to_pos = {}
-
-try:
-    import nltk
-
-    def _init_nltk_maps():
-        _wordnet_pos_to_type.update({
-            nltk.corpus.wordnet.VERB: 'Verb',
-            nltk.corpus.wordnet.NOUN: 'Noun',
-            nltk.corpus.wordnet.ADJ: 'Adjective',
-            nltk.corpus.wordnet.ADJ_SAT: 'Adjective',
-            nltk.corpus.wordnet.ADV: 'Adverb',
-        })
-        _wordnet_type_to_pos.update({
-            'Verb': [nltk.corpus.wordnet.VERB],
-            'Noun': [nltk.corpus.wordnet.NOUN],
-            'Adjective': [nltk.corpus.wordnet.ADJ, nltk.corpus.wordnet.ADJ_SAT],
-            'Adverb': [nltk.corpus.wordnet.ADV],
-        })
-except ImportError:
-    pass
-
-try:
-    import spacy
-    from spacy.tokens import Span
-
+def _init_spacy_pos_tags():
     # Part of speech tags and their public interface names in Mathics
     # see http://www.mathcs.emory.edu/~choi/doc/clear-dependency-2012.pdf
-    _pos_tags = {
-        spacy.parts_of_speech.ADJ: ('Adjective', ''),
-        spacy.parts_of_speech.ADP: ('Preposition', 'Prepositional Phrase'),
-        spacy.parts_of_speech.ADV: ('Adverb', ''),
-        spacy.parts_of_speech.CONJ: ('Conjunct', ''),
-        spacy.parts_of_speech.DET: ('Determiner', ''),
-        spacy.parts_of_speech.INTJ: ('Interjection', ''),
-        spacy.parts_of_speech.NOUN: ('Noun', 'Noun Phrase'),
-        spacy.parts_of_speech.NUM: ('Number', ''),
-        spacy.parts_of_speech.PART: ('Particle', ''),
-        spacy.parts_of_speech.PRON: ('Pronoun', ''),
-        spacy.parts_of_speech.PROPN: ('Proposition', ''),
-        spacy.parts_of_speech.PUNCT: ('Punctuation', ''),
-        spacy.parts_of_speech.SCONJ: ('Sconj', ''),
-        spacy.parts_of_speech.SYM: ('Symbol', ''),
-        spacy.parts_of_speech.VERB: ('Verb', 'Verb Phrase'),
-        spacy.parts_of_speech.X: ('X', ''),
-        spacy.parts_of_speech.EOL: ('EOL', ''),
-        spacy.parts_of_speech.SPACE: ('Space', ''),
-    }
 
-    # Mathics named entitiy names and their corresponding constants in spacy.
-    _symbols = {
-        'Person': spacy.symbols.PERSON,
-        'Company': spacy.symbols.ORG,
-        'Quantity': spacy.symbols.QUANTITY,
-        'Number': spacy.symbols.CARDINAL,
-        'CurrencyAmount': spacy.symbols.MONEY,
-        'Country': spacy.symbols.GPE,  # also includes cities and states
-        'City': spacy.symbols.GPE,  # also includes countries and states
-    }
+    if not _pos_tags:
+        _pos_tags.update({
+            spacy.parts_of_speech.ADJ: ('Adjective', ''),
+            spacy.parts_of_speech.ADP: ('Preposition', 'Prepositional Phrase'),
+            spacy.parts_of_speech.ADV: ('Adverb', ''),
+            spacy.parts_of_speech.CONJ: ('Conjunct', ''),
+            spacy.parts_of_speech.DET: ('Determiner', ''),
+            spacy.parts_of_speech.INTJ: ('Interjection', ''),
+            spacy.parts_of_speech.NOUN: ('Noun', 'Noun Phrase'),
+            spacy.parts_of_speech.NUM: ('Number', ''),
+            spacy.parts_of_speech.PART: ('Particle', ''),
+            spacy.parts_of_speech.PRON: ('Pronoun', ''),
+            spacy.parts_of_speech.PROPN: ('Proposition', ''),
+            spacy.parts_of_speech.PUNCT: ('Punctuation', ''),
+            spacy.parts_of_speech.SCONJ: ('Sconj', ''),
+            spacy.parts_of_speech.SYM: ('Symbol', ''),
+            spacy.parts_of_speech.VERB: ('Verb', 'Verb Phrase'),
+            spacy.parts_of_speech.X: ('X', ''),
+            spacy.parts_of_speech.EOL: ('EOL', ''),
+            spacy.parts_of_speech.SPACE: ('Space', ''),
+        })
 
-    # forms are everything one can use in TextCases[] or TextPosition[].
-    _forms = _make_forms()
-except ImportError:
-    _pos_tags = {}
-    _symbols = {}
-    _forms = {}
+
+def _spacy_pos_tag(t, default=None):
+    if not _pos_tags:
+        _init_spacy_pos_tags()
+    return _pos_tags.get(t, default)
+
+
+def _spacy_form(f):
+    if not _forms:
+        _init_spacy_forms()
+    return _forms.get(f)
+
+
+def _spacy_root_pos():
+    if not _root_pos:
+        _init_spacy_pos_tags()
+        _root_pos.extend(set(i for i, names in _pos_tags.items() if names[1]))
+    return _root_pos
 
 
 def _merge_dictionaries(a, b):
@@ -178,7 +201,7 @@ def _merge_dictionaries(a, b):
 
 
 def _position(t):
-    if isinstance(t, Span):
+    if isinstance(t, spacy.tokens.Span):
         l = t.doc[t.start]
         r = t.doc[t.end - 1]
         return 1 + l.idx, r.idx + len(r.text)
@@ -190,11 +213,11 @@ def _fragments(doc, sep):
     start = 0
     for i, token in enumerate(doc):
         if sep.match(token.text):
-            yield Span(doc, start, i)
+            yield spacy.tokens.Span(doc, start, i)
             start = i + 1
     end = len(doc)
     if start < end:
-        yield Span(doc, start, end)
+        yield spacy.tokens.Span(doc, start, end)
 
 
 class _SpacyBuiltin(Builtin):
@@ -459,11 +482,11 @@ class Containing(Builtin):
 
 def _cases(doc, form):
     if isinstance(form, String):
-        generators = [_forms.get(form.get_string_value())]
+        generators = [_spacy_form(form.get_string_value())]
     elif form.get_head_name() == 'System`Alternatives':
         if not all(isinstance(f, String) for f in form.leaves):
             return  # error
-        generators = [_forms.get(f.get_string_value()) for f in form.leaves]
+        generators = [_spacy_form(f.get_string_value()) for f in form.leaves]
     elif form.get_head_name() == 'System`Containing':
         if len(form.leaves) == 2:
             for t in _containing(doc, *form.leaves):
@@ -497,7 +520,7 @@ def _cases(doc, form):
 def _containing(doc, outer, inner):
     if not isinstance(outer, String):
         return  # error
-    outer_generator = _forms.get(outer.get_string_value())
+    outer_generator = _spacy_form(outer.get_string_value())
     inner_iter = _cases(doc, inner)
     inner_start = None
     produce_t = False
@@ -586,11 +609,9 @@ class TextStructure(_SpacyBuiltin):
      = {(Sentence, ((Verb Phrase, (Noun Phrase, (Determiner, The), (Noun, cat)), (Verb, sat), (Prepositional Phrase, (Preposition, on), (Noun Phrase, (Determiner, the), (Noun, mat))), (Punctuation, .))))}
     """
 
-    _root_pos = set(i for i, names in _pos_tags.items() if names[1])
-
     def _to_constituent_string(self, node):
         token, children = node
-        name, phrase_name = _pos_tags.get(token.pos, ('Unknown', 'Unknown Phrase'))
+        name, phrase_name = _spacy_pos_tag(token.pos, ('Unknown', 'Unknown Phrase'))
         if not children:
             return '(%s, %s)' % (name, token.text)
         else:
@@ -613,7 +634,7 @@ class TextStructure(_SpacyBuiltin):
 
                 sub = list(root.subtree)
 
-                if root.pos not in self._root_pos:
+                if root.pos not in _spacy_root_pos():
                     roots.extend(self._to_tree(sub, path + [root]))
                 else:
                     roots.append((root, self._to_tree(sub, path + [root])))
