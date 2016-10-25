@@ -22,8 +22,11 @@ from itertools import permutations
 from collections import defaultdict
 from math import sqrt, ceil
 
+import demandimport
+
 try:
-    import networkx as nx
+    with demandimport.enabled():
+        import networkx as nx
 except ImportError:
     nx = {}
 
