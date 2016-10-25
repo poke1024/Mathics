@@ -2342,3 +2342,20 @@ class Transliterate(Builtin):
         'Transliterate[s_String]'
         from unidecode import unidecode
         return String(unidecode(s.get_string_value()))
+
+
+class StringTrim(Builtin):
+    """
+    <dl>
+    <dt>'StringTrim[$s$]'
+        <dd>returns a version of $s$ with whitespace removed from start and end.
+    </dl>
+
+    >> StringJoin["a", StringTrim["  b "], "c"]
+     = abc
+    """
+
+    def apply(self, s, evaluation):
+        'StringTrim[s_String]'
+        return String(s.get_string_value().strip())
+
