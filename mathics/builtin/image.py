@@ -2333,6 +2333,10 @@ class WordCloud(Builtin):
     <dl>
     <dt>'WordCloud[{$word1$, $word2$, ...}]'
       <dd>Gives a word cloud with the given list of words.
+    <dt>'WordCloud[{$word1$ -> $weight1$, $word2$ -> $weight2$, ...}]'
+      <dd>Gives a word cloud with the words weighted using the given weights.
+    <dt>'WordCloud[{{$word1$, $weight1$}, {$word2$, $weight2$}, ...}]'
+      <dd>Gives a word cloud with the words weighted using the given weights.
     </dl>
 
     >> WordCloud[StringSplit[Import["ExampleData/EinsteinSzilLetter.txt"]]]
@@ -2361,24 +2365,43 @@ class WordCloud(Builtin):
         (102, 102, 102),
     )
 
+    def apply_words_weights(self, words, evaluation, options):
+        'WordCloud[words_List, weights_List, OptionsPattern[%(name)s]]'
+        pass  # FIXME
+
     def apply_words(self, words, evaluation, options):
         'WordCloud[words_List, OptionsPattern[%(name)s]]'
         ignore_case = self.get_option(options, 'IgnoreCase', evaluation) == Symbol('True')
 
         freq = dict()
         for word in words.leaves:
-            if not isinstance(word, String):
-                return
-            py_word = word.get_string_value()
+            if isinstance(word, String):
+                py_word = word.get_string_value()
+                py_weight = 1
+            else:
+                head_name = word.get_head_name()
+
+                if head_name not in ('System`List', 'System`Rule'):
+                    return
+                if len(word.leaves) != 2:
+                    return
+                s, weight = word.leaves
+
+                py_word = s.get_string_value()
+                py_weight = weight.round_to_float()
+
+                if py_word is None or py_weight is None:
+                    return
+
             if ignore_case:
                 key = py_word.lower()
             else:
                 key = py_word
             record = freq.get(key, None)
             if record is None:
-                freq[key] = [py_word, 1]
+                freq[key] = [py_word, py_weight]
             else:
-                record[1] += 1
+                record[1] += py_weight
 
         max_items = self.get_option(options, 'MaxItems', evaluation)
         if isinstance(max_items, Integer):
