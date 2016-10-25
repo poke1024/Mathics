@@ -17,6 +17,16 @@ from mathics.core.expression import (BaseExpression, Expression, Symbol,
                                      strip_context)
 import six
 
+_package_available = {}
+
+
+def _is_package_available(name):
+    available = _package_available.get(name)
+    if available is None:
+        available = pkgutil.find_loader(name) is not None
+        _package_available[name] = available
+    return available
+
 
 _packages = {}
 
