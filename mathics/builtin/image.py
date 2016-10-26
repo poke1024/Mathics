@@ -2343,6 +2343,9 @@ class WordCloud(Builtin):
 
     >> WordCloud[StringSplit[Import["ExampleData/EinsteinSzilLetter.txt"]]]
      = -Image-
+
+    >> WordCloud[Range[50] -> ToString /@ Range[50]]
+     = -Image-
     '''
 
     requires = _image_requires + (
