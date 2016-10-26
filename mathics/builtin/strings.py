@@ -2372,21 +2372,20 @@ class StringTrim(Builtin):
         if py_patt is None:
             return evaluation.message('StringExpression', 'invld', patt, expression)
 
-        n = len(text)
-        right = 0
-        p = re.compile(py_patt)
-
         if not py_patt.startswith(r'\A'):
             left_patt = r'\A' + py_patt
         else:
             left_patt = py_patt
 
-        m = re.search(left_patt, text)
-        if m:
-            left = m.end(0)
+        if not py_patt.endswith(r'\Z'):
+            right_patt = py_patt + r'\Z'
         else:
-            left = 0
+            right_patt = py_patt
 
-        right = 0  # FIXME
+        m = re.search(left_patt, text)
+        left = m.end(0) if m else 0
 
-        return String(text[left:n - right])
+        m = re.search(right_patt, text)
+        right = m.start(0) if m else len(text)
+
+        return String(text[left:right])
