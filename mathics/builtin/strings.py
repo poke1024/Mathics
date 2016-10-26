@@ -2351,11 +2351,42 @@ class StringTrim(Builtin):
         <dd>returns a version of $s$ with whitespace removed from start and end.
     </dl>
 
-    >> StringJoin["a", StringTrim["  b "], "c"]
+    >> StringJoin["a", StringTrim["  \tb\n "], "c"]
+     = abc
+
+    >> StringTrim["ababaxababyaabab", RegularExpression["(ab)+"]]
      = abc
     """
 
     def apply(self, s, evaluation):
         'StringTrim[s_String]'
-        return String(s.get_string_value().strip())
+        return String(s.get_string_value().strip(" \t\n"))
 
+    def apply_pattern(self, s, patt, expression, evaluation):
+        'StringTrim[s_String, patt_]'
+        text = s.get_string_value()
+        if not text:
+            return s
+
+        py_patt = to_regex(patt, evaluation)
+        if py_patt is None:
+            return evaluation.message('StringExpression', 'invld', patt, expression)
+
+        n = len(text)
+        right = 0
+        p = re.compile(py_patt)
+
+        if not py_patt.startswith(r'\A'):
+            left_patt = r'\A' + py_patt
+        else:
+            left_patt = py_patt
+
+        m = re.search(left_patt, text)
+        if m:
+            left = m.end(0)
+        else:
+            left = 0
+
+        right = 0  # FIXME
+
+        return String(text[left:n - right])
