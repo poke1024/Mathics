@@ -166,7 +166,7 @@ def parse_xml(parse, text, evaluation):
     try:
         return parse(text.get_string_value())
     except ParseError as e:
-        evaluation.message('XML`Parser`Get', 'prserr', str(e))
+        evaluation.message('XML`Parser`XMLGet', 'prserr', str(e))
         return Symbol('$Failed')
     except IOError:
         evaluation.message('General', 'noopen', text.get_string_value())
