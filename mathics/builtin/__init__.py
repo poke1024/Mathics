@@ -13,7 +13,7 @@ module_names = [
     'comparison', 'control', 'datentime', 'diffeqns', 'evaluation', 'exptrig', 'functional',
     'graphics', 'graphics3d', 'graphs', 'image', 'inout', 'integer', 'linalg', 'lists', 'logic', 'manipulate', 'natlang',
     'numbertheory', 'numeric', 'options', 'patterns', 'plot', 'physchemdata', 'randomnumbers', 'recurrence',
-    'specialfunctions', 'scoping', 'strings', 'structure', 'system', 'tensors', 'xmlformat']
+    'specialfunctions', 'scoping', 'strings', 'structure', 'system', 'tensors', 'xmlformat', 'htmlformat']
 
 from mathics.builtin.base import (
     Builtin, SympyObject, BoxConstruct, Operator, PatternObject)
